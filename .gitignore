@@ -1,0 +1,11 @@
+# .NET
+windows/**/bin/
+windows/**/obj/
+*.user
+
+# Android
+android/.gradle/
+android/**/build/
+android/local.properties
+*.iml
+.idea/
