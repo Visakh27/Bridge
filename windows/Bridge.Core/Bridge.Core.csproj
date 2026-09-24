@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Bridge.Protocol\Bridge.Protocol.csproj" />
+    <ProjectReference Include="..\Bridge.Security\Bridge.Security.csproj" />
+    <ProjectReference Include="..\Bridge.Network\Bridge.Network.csproj" />
+  </ItemGroup>
+</Project>

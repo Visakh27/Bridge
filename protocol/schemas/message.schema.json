@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BridgeMessage",
+  "type": "object",
+  "required": ["protocol", "type", "id", "timestamp", "payload"],
+  "properties": {
+    "protocol": { "type": "integer", "const": 1 },
+    "type": {
+      "type": "string",
+      "enum": [
+        "pairing.request", "pairing.accept", "pairing.reject",
+        "capabilities.advertise", "presence.ping", "presence.pong",
+        "device.status", "clipboard.update",
+        "file.start", "file.chunk", "file.end", "file.ack", "file.cancel",
+        "notification.post", "notification.dismiss", "error"
+      ]
+    },
+    "id": { "type": "string", "format": "uuid" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}
