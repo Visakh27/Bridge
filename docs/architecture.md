@@ -19,11 +19,18 @@ Bridge.Security ────────┤    platform)         ├────
 - **Protocol** — versioned JSON message types, identical semantics on both
   platforms (`protocol/protocol.md`). Neither platform should encode
   platform-specific assumptions into a message payload.
-- **Security** — X25519 key exchange, AES-256-GCM session encryption, SHA-256
-  file integrity. See `docs/security.md`.
-- **Network/Transport** — TCP over the local network for MVP, with the
-  transport abstracted behind an interface (`ITransport` / `Transport`) so
+- **Security** — P-256 identity keys (ECDSA) and ephemeral ECDH key exchange
+  with a signed transcript, AES-256-GCM session encryption with counter
+  nonces, SHA-256 file integrity. See `docs/security.md`.
+- **Network/Transport** — TCP over the local network for MVP (PC listens on
+  47820), with the transport abstracted behind `ITransport` on Windows so
   QUIC or Bluetooth LE can be added later without touching protocol code.
+- **Sessions** — on Windows, `Bridge.Core.BridgeHost` accepts connections,
+  handles pairing and authenticates reconnecting phones, then hands each live
+  connection to a `BridgeSession`; on Android, `network/BridgeClientSession`
+  is the counterpart, wrapped by the `BridgeConnectionService` foreground
+  service for reconnect/backoff. Both run ping/pong keep-alives and drop a
+  silent peer after 45 s.
 - **Platform integrations** — Bridge.Windows (tray, dashboard, drag-drop,
   Windows Clipboard/Notification APIs) and the Android `ui/`, `notifications/`,
   `service/` packages (Compose UI, NotificationListenerService, foreground

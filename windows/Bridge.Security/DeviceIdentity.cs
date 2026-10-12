@@ -3,15 +3,10 @@ using System.Security.Cryptography;
 namespace Bridge.Security;
 
 /// <summary>
-/// Long-term device identity keypair (X25519 via ECDiffieHellman on the P-256
-/// curve is not X25519; .NET's built-in ECDH is used here as a portable
-/// stand-in — swap for libsodium/BouncyCastle X25519 if strict X25519 is
-/// required end-to-end. The wire format only cares about the base64 public
-/// key blob, so the underlying curve is an implementation detail per platform
-/// as long as both sides of *one* connection agree - Windows talks to Windows
-/// only for identity storage; the cross-platform ECDH handshake in
-/// SessionCrypto uses the NIST P-256 curve on both Windows and Android for
-/// interoperability.
+/// Long-term device identity: a NIST P-256 key used for ECDSA-SHA256
+/// signatures over the handshake transcript (see protocol/protocol.md). The
+/// Android side uses the same curve, hash and DER signature encoding, so each
+/// platform can verify the other. Public keys travel as SubjectPublicKeyInfo.
 /// </summary>
 public sealed class DeviceIdentity
 {
@@ -26,34 +21,43 @@ public sealed class DeviceIdentity
         PublicKeyBlob = pub;
     }
 
-    public static DeviceIdentity Generate()
+    /// <param name="deviceId">Normally omitted (a new random id); tests pass one to simulate impersonation.</param>
+    public static DeviceIdentity Generate(string? deviceId = null)
     {
-        using var ecdh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
-        var priv = ecdh.ExportPkcs8PrivateKey();
-        var pub = ecdh.PublicKey.ExportSubjectPublicKeyInfo();
-        return new DeviceIdentity(Guid.NewGuid().ToString(), priv, pub);
+        using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var priv = ecdsa.ExportPkcs8PrivateKey();
+        var pub = ecdsa.ExportSubjectPublicKeyInfo();
+        return new DeviceIdentity(deviceId ?? Guid.NewGuid().ToString(), priv, pub);
     }
 
     /// <summary>
     /// Loads (or creates and persists) the identity from a DPAPI-protected
-    /// file under the app's local data folder. Never call this on a
-    /// background thread pool worker holding the private key longer than
-    /// necessary.
+    /// file under the app's local data folder. Windows-only (DPAPI).
     /// </summary>
     public static DeviceIdentity LoadOrCreate(string storePath)
     {
         if (File.Exists(storePath))
         {
-            var protectedBytes = File.ReadAllBytes(storePath);
-            var unprotected = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
-            using var ms = new MemoryStream(unprotected);
-            using var reader = new BinaryReader(ms);
-            var deviceId = reader.ReadString();
-            var privLen = reader.ReadInt32();
-            var priv = reader.ReadBytes(privLen);
-            var pubLen = reader.ReadInt32();
-            var pub = reader.ReadBytes(pubLen);
-            return new DeviceIdentity(deviceId, priv, pub);
+            try
+            {
+                var protectedBytes = File.ReadAllBytes(storePath);
+                var unprotected = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
+                using var ms = new MemoryStream(unprotected);
+                using var reader = new BinaryReader(ms);
+                var deviceId = reader.ReadString();
+                var privLen = reader.ReadInt32();
+                var priv = reader.ReadBytes(privLen);
+                var pubLen = reader.ReadInt32();
+                var pub = reader.ReadBytes(pubLen);
+                var loaded = new DeviceIdentity(deviceId, priv, pub);
+                loaded.Sign([0]); // proves the stored key is usable
+                return loaded;
+            }
+            catch (Exception ex) when (ex is CryptographicException or EndOfStreamException or IOException)
+            {
+                // Corrupt or foreign identity file: fall through and mint a new
+                // identity (previously paired phones will need to re-pair).
+            }
         }
 
         var identity = Generate();
@@ -78,10 +82,27 @@ public sealed class DeviceIdentity
         File.WriteAllBytes(storePath, protectedBytes);
     }
 
-    public ECDiffieHellman ToEcdh()
+    /// <summary>ECDSA P-256 / SHA-256 signature, DER-encoded (what Java's SHA256withECDSA produces).</summary>
+    public byte[] Sign(byte[] data)
     {
-        var ecdh = ECDiffieHellman.Create();
-        ecdh.ImportPkcs8PrivateKey(PrivateKeyBlob, out _);
-        return ecdh;
+        using var ecdsa = ECDsa.Create();
+        ecdsa.ImportPkcs8PrivateKey(PrivateKeyBlob, out _);
+        return ecdsa.SignData(data, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+    }
+
+    /// <summary>Verifies a DER-encoded ECDSA-SHA256 signature against a SubjectPublicKeyInfo key. Never throws.</summary>
+    public static bool Verify(byte[] publicKeySpki, byte[] data, byte[] signature)
+    {
+        try
+        {
+            using var ecdsa = ECDsa.Create();
+            ecdsa.ImportSubjectPublicKeyInfo(publicKeySpki, out _);
+            if (ecdsa.KeySize != 256) return false;
+            return ecdsa.VerifyData(data, signature, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
     }
 }

@@ -27,30 +27,89 @@ public static class MessageType
     public const string Error = "error";
 }
 
+/// <summary>Feature names carried in capabilities.advertise.</summary>
+public static class Features
+{
+    public const string Files = "files";
+    public const string Clipboard = "clipboard";
+    public const string Notifications = "notifications";
+    public const string Photos = "photos";
+}
+
+/// <summary>Error codes carried in error messages (docs/architecture.md).</summary>
+public static class ErrorCodes
+{
+    public const string ConnectionTimeout = "CONNECTION_TIMEOUT";
+    public const string AuthFailed = "AUTH_FAILED";
+    public const string DeviceUnpaired = "DEVICE_UNPAIRED";
+    public const string TransferInterrupted = "TRANSFER_INTERRUPTED";
+    public const string PermissionDenied = "PERMISSION_DENIED";
+}
+
 public sealed class BridgeMessage
 {
-    public int Protocol { get; init; } = 1;
+    public const int CurrentProtocol = 1;
+
+    public int Protocol { get; init; } = CurrentProtocol;
     public required string Type { get; init; }
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public required JsonObject Payload { get; init; }
 
+    /// <summary>
+    /// Builds a message whose payload is serialised with the wire naming policy
+    /// (camelCase). Serialising with default options would emit PascalCase keys,
+    /// which the Android peer rejects.
+    /// </summary>
     public static BridgeMessage Create(string type, object payload)
     {
-        var node = JsonSerializer.SerializeToNode(payload)!.AsObject();
+        var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), BridgeJson.Options) as JsonObject
+            ?? throw new ArgumentException("Payload must serialise to a JSON object", nameof(payload));
         return new BridgeMessage { Type = type, Payload = node };
     }
 
-    public string ToJson() => JsonSerializer.Serialize(this, JsonOpts.Options);
+    /// <summary>A message with an empty <c>{}</c> payload (presence.ping / presence.pong).</summary>
+    public static BridgeMessage CreateEmpty(string type) => new() { Type = type, Payload = new JsonObject() };
 
-    public static BridgeMessage FromJson(string json) =>
-        JsonSerializer.Deserialize<BridgeMessage>(json, JsonOpts.Options)
-        ?? throw new InvalidDataException("Malformed Bridge message");
+    public string ToJson() => JsonSerializer.Serialize(this, BridgeJson.Options);
 
-    public T PayloadAs<T>() => Payload.Deserialize<T>(JsonOpts.Options)!;
+    /// <exception cref="InvalidDataException">Malformed JSON or missing required fields.</exception>
+    public static BridgeMessage FromJson(string json)
+    {
+        BridgeMessage? message;
+        try
+        {
+            message = JsonSerializer.Deserialize<BridgeMessage>(json, BridgeJson.Options);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Malformed Bridge message", ex);
+        }
+        if (message is null) throw new InvalidDataException("Malformed Bridge message");
+        if (message.Payload is null || string.IsNullOrEmpty(message.Type))
+            throw new InvalidDataException("Bridge message is missing type or payload");
+        return message;
+    }
+
+    /// <exception cref="InvalidDataException">Payload doesn't match <typeparamref name="T"/>.</exception>
+    public T PayloadAs<T>()
+    {
+        try
+        {
+            return Payload.Deserialize<T>(BridgeJson.Options) ?? throw new InvalidDataException($"Malformed {Type} payload");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"Malformed {Type} payload", ex);
+        }
+    }
 }
 
-internal static class JsonOpts
+/// <summary>
+/// The one JSON configuration for everything that goes on the wire (messages,
+/// payloads and the pairing QR code), so both platforms see camelCase keys.
+/// </summary>
+public static class BridgeJson
 {
     public static readonly JsonSerializerOptions Options = new()
     {

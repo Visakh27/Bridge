@@ -2,7 +2,6 @@ package com.bridge.app.network
 
 import com.bridge.app.protocol.*
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
@@ -18,35 +17,46 @@ interface ClipboardAccess {
 }
 
 class ClipboardSyncClient(private val clipboard: ClipboardAccess, private val scope: CoroutineScope) {
-    var enabled: Boolean = false
-    var channel: EncryptedChannel? = null
-    private var suppressNextLocalEvent = false
+    companion object { const val MAX_TEXT_LENGTH = 10_000 }
+
+    /** Opt-in (docs/security.md); off by default. */
+    @Volatile var enabled: Boolean = false
+    /** Whether the PC advertised the "clipboard" feature. */
+    @Volatile var peerSupportsClipboard: Boolean = false
+    @Volatile var channel: EncryptedChannel? = null
+
+    private val lock = Any()
+    private var lastSynced: String? = null // last text sent or received, to break echo loops
 
     init {
         clipboard.setChangeListener { newText -> onLocalClipboardChanged(newText) }
     }
 
     private fun onLocalClipboardChanged(newText: String) {
-        if (!enabled) return
         val ch = channel ?: return
-        if (suppressNextLocalEvent) { suppressNextLocalEvent = false; return }
-        if (looksSensitive(newText)) return
-
-        scope.launch(Dispatchers.IO) {
-            ch.send(BridgeMessage.create(MessageType.CLIPBOARD_UPDATE, ClipboardUpdatePayload("text", newText)))
+        if (!enabled || !peerSupportsClipboard || looksSensitive(newText)) return
+        synchronized(lock) {
+            if (newText == lastSynced) return // our own write echoing back, or no change
+            lastSynced = newText
+        }
+        scope.launch {
+            runCatching { ch.send(BridgeMessage.create(MessageType.CLIPBOARD_UPDATE, ClipboardUpdatePayload("text", newText))) }
         }
     }
 
-    suspend fun handleIncoming(message: BridgeMessage) {
+    fun handleIncoming(message: BridgeMessage) {
         if (!enabled) return
         val payload = message.payloadAs<ClipboardUpdatePayload>()
-        if (payload.format != "text") return
-        suppressNextLocalEvent = true
+        if (payload.format != "text" || payload.data.length > MAX_TEXT_LENGTH) return
+        synchronized(lock) {
+            if (payload.data == lastSynced) return
+            lastSynced = payload.data // so the resulting local change event isn't echoed back
+        }
         clipboard.writeText(payload.data)
     }
 
     private fun looksSensitive(text: String): Boolean {
-        if (text.length > 10_000) return true
+        if (text.length > MAX_TEXT_LENGTH) return true
         val lower = text.lowercase()
         return lower.contains("-----begin") || lower.contains("password:") || lower.contains("secret_key")
     }

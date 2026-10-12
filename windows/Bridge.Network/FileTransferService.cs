@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Bridge.Protocol;
 using Bridge.Security;
 
@@ -14,71 +15,101 @@ public sealed class TransferProgress
     public TransferStatus Status { get; set; } = TransferStatus.InProgress;
     public int ChunksDone { get; set; }
     public int TotalChunks { get; set; }
-    public double Fraction => TotalChunks == 0 ? 0 : (double)ChunksDone / TotalChunks;
+    /// <summary>For completed incoming transfers, where the file was saved.</summary>
+    public string? SavedPath { get; set; }
+    public double Fraction => TotalChunks == 0 ? (Status == TransferStatus.Completed ? 1 : 0) : (double)ChunksDone / TotalChunks;
 }
 
 /// <summary>
-/// Chunked, resumable, integrity-checked file transfer per section 9 of the
-/// blueprint. Chunk size chosen to stay comfortably under typical socket
-/// buffers once base64-encoded (64 KB raw -> ~87 KB encoded).
+/// Chunked, integrity-checked file transfer (protocol/protocol.md). Chunk size
+/// chosen to stay comfortably under typical socket buffers once
+/// base64-encoded (64 KB raw -> ~87 KB encoded).
+///
+/// Incoming file names are sanitised (no path traversal, no overwriting existing
+/// files); chunks must arrive in order and never exceed the announced size.
 /// </summary>
 public sealed class FileTransferService
 {
     public const int ChunkSize = 64 * 1024;
+    public const int MaxConcurrentIncoming = 8;
 
-    private readonly Dictionary<string, CancellationTokenSource> _activeCancellations = new();
-    private readonly Dictionary<string, FileStream> _incomingStreams = new();
-    private readonly Dictionary<string, string> _incomingTempPaths = new();
-    private readonly Dictionary<string, FileStartPayload> _incomingMeta = new();
+    private sealed class Incoming
+    {
+        public required FileStartPayload Meta { get; init; }
+        public required string SafeName { get; init; }
+        public required string TempPath { get; init; }
+        public required FileStream Stream { get; init; }
+        public int NextIndex { get; set; }
+        public long BytesWritten { get; set; }
+    }
+
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeCancellations = new();
+    private readonly ConcurrentDictionary<string, TransferProgress> _awaitingAck = new();
+    private readonly Dictionary<string, Incoming> _incoming = new(); // only touched by the session's receive loop
 
     public event Action<TransferProgress>? ProgressChanged;
 
-    public async Task SendFileAsync(EncryptedChannel channel, string filePath, CancellationToken ct = default)
+    /// <summary>Sends a file; never throws for I/O or cancellation (the returned status says what happened).</summary>
+    public async Task<TransferProgress> SendFileAsync(EncryptedChannel channel, string filePath, CancellationToken ct = default)
     {
         var transferId = Guid.NewGuid().ToString();
         var fileInfo = new FileInfo(filePath);
-        var hash = await FileHasher.Sha256HexAsync(filePath, ct);
-        var totalChunks = (int)Math.Ceiling(fileInfo.Length / (double)ChunkSize);
-
         var progress = new TransferProgress
         {
             TransferId = transferId,
             FileName = fileInfo.Name,
             Direction = TransferDirection.Sending,
-            TotalChunks = totalChunks,
         };
-        ProgressChanged?.Invoke(progress);
 
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _activeCancellations[transferId] = cts;
-
-        await channel.SendAsync(BridgeMessage.Create(MessageType.FileStart,
-            new FileStartPayload(transferId, fileInfo.Name, fileInfo.Length, hash, totalChunks)), cts.Token);
-
-        await using var stream = File.OpenRead(filePath);
-        var buffer = new byte[ChunkSize];
-        for (var index = 0; index < totalChunks; index++)
+        var started = false;
+        try
         {
-            if (cts.IsCancellationRequested)
+            var hash = await FileHasher.Sha256HexAsync(filePath, cts.Token);
+            var size = fileInfo.Length;
+            progress.TotalChunks = (int)((size + ChunkSize - 1) / ChunkSize);
+            ProgressChanged?.Invoke(progress);
+
+            await channel.SendAsync(BridgeMessage.Create(MessageType.FileStart,
+                new FileStartPayload(transferId, fileInfo.Name, size, hash, progress.TotalChunks)), cts.Token);
+            started = true;
+
+            await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkSize, useAsync: true);
+            var buffer = new byte[ChunkSize];
+            for (var index = 0; index < progress.TotalChunks; index++)
             {
-                progress.Status = TransferStatus.Cancelled;
+                var read = await ReadFullAsync(stream, buffer, cts.Token);
+                if (read == 0) throw new IOException("File shrank while it was being sent");
+                await channel.SendAsync(BridgeMessage.Create(MessageType.FileChunk,
+                    new FileChunkPayload(transferId, index, Convert.ToBase64String(buffer, 0, read))), cts.Token);
+
+                progress.ChunksDone = index + 1;
                 ProgressChanged?.Invoke(progress);
-                return;
             }
 
-            var read = await stream.ReadAsync(buffer.AsMemory(0, ChunkSize), cts.Token);
-            var chunkData = Convert.ToBase64String(buffer, 0, read);
-            await channel.SendAsync(BridgeMessage.Create(MessageType.FileChunk,
-                new FileChunkPayload(transferId, index, chunkData)), cts.Token);
-
-            progress.ChunksDone = index + 1;
-            ProgressChanged?.Invoke(progress);
+            _awaitingAck[transferId] = progress;
+            await channel.SendAsync(BridgeMessage.Create(MessageType.FileEnd, new FileEndPayload(transferId)), cts.Token);
+            progress.Status = TransferStatus.Completed;
+        }
+        catch (OperationCanceledException)
+        {
+            progress.Status = TransferStatus.Cancelled;
+            if (started) await TrySendCancelAsync(channel, transferId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            progress.Status = TransferStatus.Failed;
+            if (started) await TrySendCancelAsync(channel, transferId);
+        }
+        finally
+        {
+            _activeCancellations.TryRemove(transferId, out _);
+            if (progress.Status != TransferStatus.Completed) _awaitingAck.TryRemove(transferId, out _);
         }
 
-        await channel.SendAsync(BridgeMessage.Create(MessageType.FileEnd, new FileEndPayload(transferId)), cts.Token);
-        progress.Status = TransferStatus.Completed;
         ProgressChanged?.Invoke(progress);
-        _activeCancellations.Remove(transferId);
+        return progress;
     }
 
     public void CancelTransfer(string transferId)
@@ -86,7 +117,7 @@ public sealed class FileTransferService
         if (_activeCancellations.TryGetValue(transferId, out var cts)) cts.Cancel();
     }
 
-    /// <summary>Feed every incoming BridgeMessage here; handles file.start/chunk/end and writes to downloadDir.</summary>
+    /// <summary>Feed every incoming file.* message here; completed files land in <paramref name="downloadDir"/>.</summary>
     public async Task<TransferProgress?> HandleIncomingAsync(EncryptedChannel channel, BridgeMessage message, string downloadDir, CancellationToken ct = default)
     {
         switch (message.Type)
@@ -94,90 +125,162 @@ public sealed class FileTransferService
             case MessageType.FileStart:
             {
                 var meta = message.PayloadAs<FileStartPayload>();
-                _incomingMeta[meta.TransferId] = meta;
-                Directory.CreateDirectory(downloadDir);
-                var tempPath = Path.Combine(downloadDir, meta.FileName + ".part");
-                _incomingTempPaths[meta.TransferId] = tempPath;
-                _incomingStreams[meta.TransferId] = File.Create(tempPath);
-                var progress = new TransferProgress
+                if (string.IsNullOrEmpty(meta.TransferId) || meta.Size < 0 || meta.TotalChunks < 0 ||
+                    _incoming.ContainsKey(meta.TransferId) || _incoming.Count >= MaxConcurrentIncoming)
                 {
-                    TransferId = meta.TransferId,
-                    FileName = meta.FileName,
-                    Direction = TransferDirection.Receiving,
-                    TotalChunks = meta.TotalChunks,
+                    await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
+                        new FileAckPayload(meta.TransferId ?? string.Empty, FileAckStatus.Cancelled)), ct);
+                    return null;
+                }
+
+                Directory.CreateDirectory(downloadDir);
+                var safeName = SafeFileName.Sanitize(meta.FileName);
+                var tempPath = Path.Combine(downloadDir, $".bridge-{Guid.NewGuid():N}.part");
+                _incoming[meta.TransferId] = new Incoming
+                {
+                    Meta = meta,
+                    SafeName = safeName,
+                    TempPath = tempPath,
+                    Stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, ChunkSize, useAsync: true),
                 };
-                ProgressChanged?.Invoke(progress);
-                return progress;
+                return Report(new TransferProgress
+                {
+                    TransferId = meta.TransferId, FileName = safeName,
+                    Direction = TransferDirection.Receiving, TotalChunks = meta.TotalChunks,
+                });
             }
             case MessageType.FileChunk:
             {
                 var chunk = message.PayloadAs<FileChunkPayload>();
-                if (!_incomingStreams.TryGetValue(chunk.TransferId, out var fs)) return null;
-                var bytes = Convert.FromBase64String(chunk.Data);
-                await fs.WriteAsync(bytes, ct);
-                var meta = _incomingMeta[chunk.TransferId];
-                var progress = new TransferProgress
+                if (!_incoming.TryGetValue(chunk.TransferId, out var state)) return null;
+
+                byte[] bytes;
+                try { bytes = Convert.FromBase64String(chunk.Data); }
+                catch (FormatException) { return await FailIncomingAsync(channel, state, FileAckStatus.HashMismatch, ct); }
+
+                if (chunk.Index != state.NextIndex || state.BytesWritten + bytes.Length > state.Meta.Size)
+                    return await FailIncomingAsync(channel, state, FileAckStatus.HashMismatch, ct);
+
+                await state.Stream.WriteAsync(bytes, ct);
+                state.NextIndex++;
+                state.BytesWritten += bytes.Length;
+                return Report(new TransferProgress
                 {
-                    TransferId = chunk.TransferId,
-                    FileName = meta.FileName,
-                    Direction = TransferDirection.Receiving,
-                    TotalChunks = meta.TotalChunks,
-                    ChunksDone = chunk.Index + 1,
-                };
-                ProgressChanged?.Invoke(progress);
-                return progress;
+                    TransferId = chunk.TransferId, FileName = state.SafeName,
+                    Direction = TransferDirection.Receiving, TotalChunks = state.Meta.TotalChunks,
+                    ChunksDone = state.NextIndex,
+                });
             }
             case MessageType.FileEnd:
             {
                 var end = message.PayloadAs<FileEndPayload>();
-                if (!_incomingStreams.TryGetValue(end.TransferId, out var fs)) return null;
-                await fs.DisposeAsync();
-                _incomingStreams.Remove(end.TransferId);
+                if (!_incoming.TryGetValue(end.TransferId, out var state)) return null;
+                _incoming.Remove(end.TransferId);
+                await state.Stream.DisposeAsync();
 
-                var meta = _incomingMeta[end.TransferId];
-                var tempPath = _incomingTempPaths[end.TransferId];
-                var actualHash = await FileHasher.Sha256HexAsync(tempPath, ct);
-
-                if (actualHash != meta.Sha256)
+                var actualHash = await FileHasher.Sha256HexAsync(state.TempPath, ct);
+                if (state.BytesWritten != state.Meta.Size ||
+                    !string.Equals(actualHash, state.Meta.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
+                    TryDelete(state.TempPath);
                     await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
-                        new FileAckPayload(end.TransferId, "hash_mismatch")), ct);
-                    File.Delete(tempPath);
-                    return new TransferProgress
-                    {
-                        TransferId = end.TransferId, FileName = meta.FileName,
-                        Direction = TransferDirection.Receiving, Status = TransferStatus.Failed,
-                        TotalChunks = meta.TotalChunks, ChunksDone = meta.TotalChunks,
-                    };
+                        new FileAckPayload(end.TransferId, FileAckStatus.HashMismatch)), ct);
+                    return Report(Finished(state, TransferStatus.Failed));
                 }
 
-                var finalPath = Path.Combine(Path.GetDirectoryName(tempPath)!, meta.FileName);
-                File.Move(tempPath, finalPath, overwrite: true);
+                var finalPath = SafeFileName.UniquePath(downloadDir, state.SafeName);
+                File.Move(state.TempPath, finalPath, overwrite: false);
                 await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
-                    new FileAckPayload(end.TransferId, "ok")), ct);
+                    new FileAckPayload(end.TransferId, FileAckStatus.Ok)), ct);
 
-                var progress = new TransferProgress
-                {
-                    TransferId = end.TransferId, FileName = meta.FileName,
-                    Direction = TransferDirection.Receiving, Status = TransferStatus.Completed,
-                    TotalChunks = meta.TotalChunks, ChunksDone = meta.TotalChunks,
-                };
-                ProgressChanged?.Invoke(progress);
-                return progress;
+                var done = Finished(state, TransferStatus.Completed);
+                done.SavedPath = finalPath;
+                return Report(done);
             }
             case MessageType.FileCancel:
             {
                 var cancel = message.PayloadAs<FileCancelPayload>();
-                if (_incomingStreams.TryGetValue(cancel.TransferId, out var fs))
-                {
-                    await fs.DisposeAsync();
-                    _incomingStreams.Remove(cancel.TransferId);
-                    if (_incomingTempPaths.TryGetValue(cancel.TransferId, out var p) && File.Exists(p)) File.Delete(p);
-                }
-                return null;
+                // The peer may be cancelling something we are sending to it…
+                CancelTransfer(cancel.TransferId);
+                // …or something it was sending to us.
+                if (!_incoming.TryGetValue(cancel.TransferId, out var state)) return null;
+                _incoming.Remove(cancel.TransferId);
+                await state.Stream.DisposeAsync();
+                TryDelete(state.TempPath);
+                return Report(Finished(state, TransferStatus.Cancelled));
+            }
+            case MessageType.FileAck:
+            {
+                var ack = message.PayloadAs<FileAckPayload>();
+                if (!_awaitingAck.TryRemove(ack.TransferId, out var sent)) return null;
+                if (ack.Status == FileAckStatus.Ok) return sent;
+                sent.Status = ack.Status == FileAckStatus.Cancelled ? TransferStatus.Cancelled : TransferStatus.Failed;
+                return Report(sent);
             }
             default:
                 return null;
         }
+    }
+
+    /// <summary>Drops every partially received file (call when the session ends).</summary>
+    public void AbortIncoming()
+    {
+        foreach (var state in _incoming.Values)
+        {
+            state.Stream.Dispose();
+            TryDelete(state.TempPath);
+            Report(Finished(state, TransferStatus.Failed));
+        }
+        _incoming.Clear();
+        foreach (var cts in _activeCancellations.Values) cts.Cancel();
+    }
+
+    private async Task<TransferProgress> FailIncomingAsync(EncryptedChannel channel, Incoming state, string status, CancellationToken ct)
+    {
+        _incoming.Remove(state.Meta.TransferId);
+        await state.Stream.DisposeAsync();
+        TryDelete(state.TempPath);
+        await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck, new FileAckPayload(state.Meta.TransferId, status)), ct);
+        return Report(Finished(state, TransferStatus.Failed));
+    }
+
+    private static TransferProgress Finished(Incoming state, TransferStatus status) => new()
+    {
+        TransferId = state.Meta.TransferId, FileName = state.SafeName,
+        Direction = TransferDirection.Receiving, Status = status,
+        TotalChunks = state.Meta.TotalChunks, ChunksDone = state.NextIndex,
+    };
+
+    private TransferProgress Report(TransferProgress progress)
+    {
+        ProgressChanged?.Invoke(progress);
+        return progress;
+    }
+
+    private static async Task<int> ReadFullAsync(Stream stream, byte[] buffer, CancellationToken ct)
+    {
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total), ct);
+            if (read == 0) break;
+            total += read;
+        }
+        return total;
+    }
+
+    private static async Task TrySendCancelAsync(EncryptedChannel channel, string transferId)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await channel.SendAsync(BridgeMessage.Create(MessageType.FileCancel, new FileCancelPayload(transferId)), timeout.Token);
+        }
+        catch { /* channel already gone */ }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }

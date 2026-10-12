@@ -27,3 +27,17 @@ public sealed record PairingRequestPayload(string PairingToken, string DeviceNam
 public sealed record PairingAcceptPayload(string DeviceName, string PublicKeyBase64);
 
 public sealed record PairingRejectPayload(string Reason);
+
+/// <summary>
+/// Contents of the pairing QR code. <see cref="PublicKeyBase64"/> is the PC's
+/// long-term identity key (SubjectPublicKeyInfo); the phone uses it to check
+/// the PC's handshake signature before revealing the pairing token.
+/// </summary>
+public sealed record PairingQrPayload(string PairingToken, string Host, int Port, string DeviceId, string DeviceName, string PublicKeyBase64);
+
+public static class FileAckStatus
+{
+    public const string Ok = "ok";
+    public const string HashMismatch = "hash_mismatch";
+    public const string Cancelled = "cancelled";
+}

@@ -9,7 +9,7 @@ shared, versioned JSON protocol (`protocol/protocol.md`).
 
 ```
 bridge/
-├── windows/        Bridge.App, Bridge.Windows (WinUI 3), Bridge.Core,
+├── windows/        Bridge.Windows (WinUI 3 app + MSIX manifest), Bridge.Core,
 │                   Bridge.Network, Bridge.Protocol, Bridge.Security, Bridge.Tests
 ├── android/        Kotlin + Jetpack Compose app (app/src/main/java/com/bridge/app/...)
 ├── protocol/       protocol.md + JSON schemas — the contract both platforms implement
@@ -23,19 +23,21 @@ privacy model.
 ## What's here vs. what's left
 
 This is a genuine starting implementation, not a stub: the protocol,
-handshake, session encryption, pairing, file transfer, and clipboard sync are
-fully implemented and interoperate (Windows uses .NET's ECDH/HKDF/AES-GCM,
+authenticated handshake, session encryption, pairing, reconnect, file
+transfer, clipboard sync, status and notification mirroring are implemented
+on both sides and interoperate (Windows uses .NET's ECDH/ECDSA/HKDF/AES-GCM,
 Android uses the JCE equivalents with matching curve/labels/framing — see
-`Bridge.Security.SessionCrypto` / `network/SessionCrypto.kt`). What's
+`Bridge.Security.SessionCrypto` / `security/SessionCrypto.kt`). The
+Windows ↔ Android wire compatibility has been exercised end to end by running
+the Windows `BridgeHost` against the Android client code over TCP. What's
 intentionally left as follow-up work, per the blueprint's own phased roadmap:
 
-- Local device **discovery** (Bluetooth/mDNS) — pairing currently connects by
-  scanning a QR code that encodes the PC's LAN IP directly; broadcast
-  discovery for "already paired, reconnect automatically" is a Phase 1 item.
-- **Reconnect wiring** on the Windows side beyond `ReconnectManager`'s skeleton.
-- A production **Room/SQLite**-backed `PairedDeviceStore` on Android (an
-  in-memory placeholder is used in `MainActivity` so the UI is runnable) and
-  swapping Windows' JSON-file store for SQLite per section 5/14.
+- Local device **discovery** (Bluetooth/mDNS) — the phone reconnects to the
+  PC address and port (TCP 47820) from the QR code; if the PC's IP changes it
+  has to be re-paired until broadcast discovery (a Phase 1 item) exists.
+- A production **Room/SQLite**-backed `PairedDeviceStore` on Android (a
+  SharedPreferences store is used now) and swapping Windows' JSON-file store
+  for SQLite per section 5/14.
 - Notification **actions** (reply/dismiss), **photos/Explorer** integration,
   **calls**, and **screen mirroring** — all explicitly Phase 2+ / post-MVP in
   the blueprint (sections 12–13, 22–23).
@@ -43,9 +45,9 @@ intentionally left as follow-up work, per the blueprint's own phased roadmap:
 
 ## Building
 
-Windows needs Visual Studio 2022 with the WinUI 3 workload; Android needs
-Android Studio. Neither can be compiled or run inside this environment — see
-`docs/development.md` for exact steps once you have the projects open
-locally. Unit tests (`Bridge.Tests` for .NET, `app/src/test` for Kotlin) cover
-protocol serialization and the crypto round-trip and are a good first sanity
-check after opening each project.
+Windows needs Visual Studio 2022 with the WinUI 3 workload (build for x64,
+x86 or ARM64); Android needs Android Studio (`./gradlew assembleDebug`). See
+`docs/development.md` for exact steps. Unit tests (`Bridge.Tests` for .NET,
+`app/src/test` for Kotlin) cover the wire format, crypto, pairing rules, safe
+file handling and full pair → reconnect → transfer sessions over loopback, and
+are a good first sanity check after opening each project.

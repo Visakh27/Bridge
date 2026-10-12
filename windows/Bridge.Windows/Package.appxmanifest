@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Single-project MSIX manifest. Bridge.Windows runs unpackaged by default
+  (WindowsPackageType=None, so F5 just works); set WindowsPackageType to MSIX
+  in Bridge.Windows.csproj, or use Publish > Create App Packages, to produce
+  an MSIX from this manifest.
+-->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
@@ -11,19 +17,22 @@
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>
   <Resources>
     <Resource Language="x-generate" />
   </Resources>
   <Applications>
-    <Application Id="App" Executable="Bridge.Windows.exe" EntryPoint="Bridge.Windows.App">
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
       <uap:VisualElements DisplayName="Bridge" Description="Android ↔ Windows continuity" BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+        Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
     </Application>
   </Applications>
   <Capabilities>
-    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
     <Capability Name="privateNetworkClientServer" />
   </Capabilities>
 </Package>
