@@ -101,10 +101,12 @@ private fun QrScanner(modifier: Modifier, onQrScanned: (String) -> Unit) {
         BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
     }
     val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
+    val disposed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
             // Without this the camera stayed bound to the activity after pairing.
+            disposed.set(true)
             runCatching { if (providerFuture.isDone) providerFuture.get().unbindAll() }
             scanner.close()
             executor.shutdown()
@@ -116,6 +118,7 @@ private fun QrScanner(modifier: Modifier, onQrScanned: (String) -> Unit) {
         factory = { ctx ->
             val previewView = PreviewView(ctx)
             providerFuture.addListener({
+                if (disposed.get()) return@addListener // left the screen before the camera was ready
                 val cameraProvider = providerFuture.get()
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val analysis = ImageAnalysis.Builder()

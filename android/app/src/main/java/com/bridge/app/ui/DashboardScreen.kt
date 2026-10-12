@@ -9,8 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.bridge.app.notifications.BridgeNotificationListener
 import com.bridge.app.service.BridgeConnectionService
 
@@ -23,8 +26,16 @@ import com.bridge.app.service.BridgeConnectionService
 fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) {
     val context = LocalContext.current
     var clipboardSyncEnabled by remember { mutableStateOf(BridgeConnectionService.isClipboardSyncEnabled(context)) }
-    val notificationAccess = remember(state) {
-        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    fun hasNotificationAccess() = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    var notificationAccess by remember { mutableStateOf(hasNotificationAccess()) }
+    // Re-check when the user comes back from the Settings screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) notificationAccess = hasNotificationAccess()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     var confirmForget by remember { mutableStateOf(false) }
 

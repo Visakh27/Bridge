@@ -43,8 +43,20 @@ public sealed class FileTransferService
         public long BytesWritten { get; set; }
     }
 
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeCancellations = new();
-    private readonly ConcurrentDictionary<string, TransferProgress> _awaitingAck = new();
+    /// <summary>
+    /// An outgoing transfer, kept from file.start until the receiver's file.ack.
+    /// The receiver may ack early (rejecting file.start, or failing mid-transfer);
+    /// that verdict stops the sender instead of being ignored.
+    /// </summary>
+    private sealed class Outgoing
+    {
+        public required TransferProgress Progress { get; init; }
+        public required CancellationTokenSource Cts { get; init; }
+        public string? PeerVerdict { get; set; } // non-ok file.ack status, if any
+        public bool Finished { get; set; }       // sender loop has returned
+    }
+
+    private readonly ConcurrentDictionary<string, Outgoing> _outgoing = new();
     private readonly Dictionary<string, Incoming> _incoming = new(); // only touched by the session's receive loop
 
     public event Action<TransferProgress>? ProgressChanged;
@@ -62,8 +74,10 @@ public sealed class FileTransferService
         };
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _activeCancellations[transferId] = cts;
+        var outgoing = new Outgoing { Progress = progress, Cts = cts };
+        _outgoing[transferId] = outgoing;
         var started = false;
+        TransferStatus status;
         try
         {
             var hash = await FileHasher.Sha256HexAsync(filePath, cts.Token);
@@ -88,25 +102,28 @@ public sealed class FileTransferService
                 ProgressChanged?.Invoke(progress);
             }
 
-            _awaitingAck[transferId] = progress;
             await channel.SendAsync(BridgeMessage.Create(MessageType.FileEnd, new FileEndPayload(transferId)), cts.Token);
-            progress.Status = TransferStatus.Completed;
+            status = TransferStatus.Completed;
         }
         catch (OperationCanceledException)
         {
-            progress.Status = TransferStatus.Cancelled;
-            if (started) await TrySendCancelAsync(channel, transferId);
+            status = TransferStatus.Cancelled;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            progress.Status = TransferStatus.Failed;
-            if (started) await TrySendCancelAsync(channel, transferId);
+            status = TransferStatus.Failed;
         }
-        finally
+
+        bool peerAborted;
+        lock (outgoing)
         {
-            _activeCancellations.TryRemove(transferId, out _);
-            if (progress.Status != TransferStatus.Completed) _awaitingAck.TryRemove(transferId, out _);
+            outgoing.Finished = true;
+            peerAborted = outgoing.PeerVerdict is not null;
+            progress.Status = peerAborted ? StatusFor(outgoing.PeerVerdict!) : status;
         }
+        // Tell the receiver to drop its partial file, unless it already gave up on its own.
+        if (started && !peerAborted && progress.Status != TransferStatus.Completed) await TrySendCancelAsync(channel, transferId);
+        if (progress.Status != TransferStatus.Completed) _outgoing.TryRemove(transferId, out _); // else: await file.ack
 
         ProgressChanged?.Invoke(progress);
         return progress;
@@ -114,8 +131,15 @@ public sealed class FileTransferService
 
     public void CancelTransfer(string transferId)
     {
-        if (_activeCancellations.TryGetValue(transferId, out var cts)) cts.Cancel();
+        if (!_outgoing.TryGetValue(transferId, out var outgoing)) return;
+        lock (outgoing)
+        {
+            if (!outgoing.Finished) outgoing.Cts.Cancel();
+        }
     }
+
+    private static TransferStatus StatusFor(string ackStatus) =>
+        ackStatus == FileAckStatus.Cancelled ? TransferStatus.Cancelled : TransferStatus.Failed;
 
     /// <summary>Feed every incoming file.* message here; completed files land in <paramref name="downloadDir"/>.</summary>
     public async Task<TransferProgress?> HandleIncomingAsync(EncryptedChannel channel, BridgeMessage message, string downloadDir, CancellationToken ct = default)
@@ -133,15 +157,31 @@ public sealed class FileTransferService
                     return null;
                 }
 
-                Directory.CreateDirectory(downloadDir);
                 var safeName = SafeFileName.Sanitize(meta.FileName);
                 var tempPath = Path.Combine(downloadDir, $".bridge-{Guid.NewGuid():N}.part");
+                FileStream tempStream;
+                try
+                {
+                    Directory.CreateDirectory(downloadDir);
+                    tempStream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, ChunkSize, useAsync: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Can't store it (disk full, permissions): tell the sender now rather than let it stream for nothing.
+                    await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
+                        new FileAckPayload(meta.TransferId, FileAckStatus.Cancelled)), ct);
+                    return Report(new TransferProgress
+                    {
+                        TransferId = meta.TransferId, FileName = safeName,
+                        Direction = TransferDirection.Receiving, Status = TransferStatus.Failed,
+                    });
+                }
                 _incoming[meta.TransferId] = new Incoming
                 {
                     Meta = meta,
                     SafeName = safeName,
                     TempPath = tempPath,
-                    Stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, ChunkSize, useAsync: true),
+                    Stream = tempStream,
                 };
                 return Report(new TransferProgress
                 {
@@ -201,7 +241,17 @@ public sealed class FileTransferService
             {
                 var cancel = message.PayloadAs<FileCancelPayload>();
                 // The peer may be cancelling something we are sending to it…
-                CancelTransfer(cancel.TransferId);
+                if (_outgoing.TryGetValue(cancel.TransferId, out var outgoing))
+                {
+                    lock (outgoing)
+                    {
+                        if (!outgoing.Finished)
+                        {
+                            outgoing.PeerVerdict = FileAckStatus.Cancelled;
+                            outgoing.Cts.Cancel();
+                        }
+                    }
+                }
                 // …or something it was sending to us.
                 if (!_incoming.TryGetValue(cancel.TransferId, out var state)) return null;
                 _incoming.Remove(cancel.TransferId);
@@ -212,18 +262,32 @@ public sealed class FileTransferService
             case MessageType.FileAck:
             {
                 var ack = message.PayloadAs<FileAckPayload>();
-                if (!_awaitingAck.TryRemove(ack.TransferId, out var sent)) return null;
-                if (ack.Status == FileAckStatus.Ok) return sent;
-                sent.Status = ack.Status == FileAckStatus.Cancelled ? TransferStatus.Cancelled : TransferStatus.Failed;
-                return Report(sent);
+                if (!_outgoing.TryGetValue(ack.TransferId, out var outgoing)) return null;
+                if (ack.Status == FileAckStatus.Ok)
+                {
+                    _outgoing.TryRemove(ack.TransferId, out _);
+                    return outgoing.Progress;
+                }
+                lock (outgoing)
+                {
+                    outgoing.PeerVerdict = ack.Status;
+                    if (!outgoing.Finished)
+                    {
+                        outgoing.Cts.Cancel(); // still sending: stop; the sender reports the verdict
+                        return null;
+                    }
+                    outgoing.Progress.Status = StatusFor(ack.Status);
+                }
+                _outgoing.TryRemove(ack.TransferId, out _);
+                return Report(outgoing.Progress);
             }
             default:
                 return null;
         }
     }
 
-    /// <summary>Drops every partially received file (call when the session ends).</summary>
-    public void AbortIncoming()
+    /// <summary>Call when the session ends: drops partially received files and stops outgoing sends.</summary>
+    public void AbortAll()
     {
         foreach (var state in _incoming.Values)
         {
@@ -232,7 +296,15 @@ public sealed class FileTransferService
             Report(Finished(state, TransferStatus.Failed));
         }
         _incoming.Clear();
-        foreach (var cts in _activeCancellations.Values) cts.Cancel();
+
+        foreach (var (id, outgoing) in _outgoing)
+        {
+            lock (outgoing)
+            {
+                if (!outgoing.Finished) outgoing.Cts.Cancel();
+            }
+            _outgoing.TryRemove(id, out _); // a sent file whose ack was lost keeps its "Completed" status
+        }
     }
 
     private async Task<TransferProgress> FailIncomingAsync(EncryptedChannel channel, Incoming state, string status, CancellationToken ct)

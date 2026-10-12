@@ -168,7 +168,7 @@ public sealed class BridgeSession : IAsyncDisposable
         _cts.Cancel();
         Device.IsConnected = false;
         if (ReferenceEquals(_clipboard.Channel, _channel)) _clipboard.Channel = null;
-        _fileTransfer.AbortIncoming();
+        _fileTransfer.AbortAll();
         await _channel.DisposeAsync();
         StatusChanged?.Invoke(Device);
         Ended?.Invoke(this);

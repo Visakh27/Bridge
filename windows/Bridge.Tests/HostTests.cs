@@ -21,12 +21,13 @@ public sealed class HostTests : IDisposable
     private readonly BridgeHost _host;
     private readonly PairingService _pairing;
     private readonly ClipboardSyncService _clipboard;
+    private readonly FileTransferService _files = new();
 
     public HostTests()
     {
         _pairing = new PairingService(_pc, _store, "Test PC");
         _clipboard = new ClipboardSyncService(_pcClipboard) { Enabled = true };
-        _host = new BridgeHost(_pc, _store, _pairing, new FileTransferService(), _clipboard, _downloads);
+        _host = new BridgeHost(_pc, _store, _pairing, _files, _clipboard, _downloads);
         _ = _host.RunAsync(_listener, _cts.Token);
     }
 
@@ -130,8 +131,7 @@ public sealed class HostTests : IDisposable
         await using (ch)
         {
             var done = new TaskCompletionSource<TransferProgress>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var hostTransfers = GetFileTransfer();
-            hostTransfers.ProgressChanged += p => { if (p.Direction == TransferDirection.Receiving && p.Status != TransferStatus.InProgress) done.TrySetResult(p); };
+            _files.ProgressChanged += p => { if (p.Direction == TransferDirection.Receiving && p.Status != TransferStatus.InProgress) done.TrySetResult(p); };
 
             var content = new byte[FileTransferService.ChunkSize * 2 + 123];
             Random.Shared.NextBytes(content);
@@ -230,8 +230,109 @@ public sealed class HostTests : IDisposable
         Assert.Equal(ErrorCodes.DeviceUnpaired, (await again.ReceiveAsync().WithTimeout()).PayloadAs<ErrorPayload>().Code);
     }
 
-    private FileTransferService GetFileTransfer() =>
-        (FileTransferService)typeof(BridgeHost).GetField("_fileTransfer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_host)!;
+    [Fact]
+    public async Task Receiver_Rejection_Stops_Sender_Early()
+    {
+        // A phone that refuses the file (e.g. storage full) must stop the PC
+        // mid-stream, and the PC must not report "Completed".
+        var phone = DeviceIdentity.Generate();
+        await PairAsync(phone);
+        var (ch, session) = await StartSessionAsync(phone);
+        await using (ch)
+        {
+            var src = Path.Combine(Loopback.TempDir(), "big.bin");
+            await File.WriteAllBytesAsync(src, new byte[FileTransferService.ChunkSize * 200]);
+            var send = session.SendFileAsync(src);
+
+            var start = await ch.ReceiveAsync().WithTimeout();
+            var id = start.PayloadAs<FileStartPayload>().TransferId;
+            await ch.SendAsync(BridgeMessage.Create(MessageType.FileAck, new FileAckPayload(id, FileAckStatus.Cancelled)));
+
+            var result = await send.WithTimeout();
+            Assert.Equal(TransferStatus.Cancelled, result.Status);
+            Assert.True(result.ChunksDone < 200, $"sender kept going: {result.ChunksDone} chunks");
+
+            // Drain: nothing after the rejection should be a file.end.
+            var types = new List<string>();
+            await ch.SendAsync(BridgeMessage.CreateEmpty(MessageType.PresencePing));
+            while (true)
+            {
+                var m = await ch.ReceiveAsync().WithTimeout();
+                if (m.Type == MessageType.PresencePong) break;
+                types.Add(m.Type);
+            }
+            Assert.DoesNotContain(MessageType.FileEnd, string.Join(",", types));
+        }
+    }
+
+    [Fact]
+    public async Task Disconnect_Mid_Transfer_Leaves_No_Partial_File()
+    {
+        var phone = DeviceIdentity.Generate();
+        await PairAsync(phone);
+        var (ch, session) = await StartSessionAsync(phone);
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Ended += _ => ended.TrySetResult();
+        var failed = new TaskCompletionSource<TransferProgress>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _files.ProgressChanged += p => { if (p.Status == TransferStatus.Failed) failed.TrySetResult(p); };
+
+        await ch.SendAsync(BridgeMessage.Create(MessageType.FileStart, new FileStartPayload("t-x", "half.bin", 100_000, "00", 2)));
+        await ch.SendAsync(BridgeMessage.Create(MessageType.FileChunk, new FileChunkPayload("t-x", 0, Convert.ToBase64String(new byte[65536]))));
+        await Task.Delay(300);
+        Assert.Single(Directory.GetFiles(_downloads, "*.part"));
+        await ch.DisposeAsync(); // phone walks out of Wi-Fi range
+
+        await ended.Task.WithTimeout();
+        Assert.Equal("half.bin", (await failed.Task.WithTimeout()).FileName);
+        Assert.Empty(Directory.GetFiles(_downloads));
+    }
+
+    [Fact]
+    public async Task Malformed_Message_Does_Not_Drop_Session()
+    {
+        var phone = DeviceIdentity.Generate();
+        await PairAsync(phone);
+        var (ch, session) = await StartSessionAsync(phone);
+        await using (ch)
+        {
+            // file.start with the wrong field types, then an unknown future message type.
+            await ch.SendAsync(new BridgeMessage { Type = MessageType.FileStart, Payload = new System.Text.Json.Nodes.JsonObject { ["transferId"] = 5, ["size"] = "big" } });
+            await ch.SendAsync(BridgeMessage.Create("photos.list", new { Album = "x" }));
+            await ch.SendAsync(BridgeMessage.CreateEmpty(MessageType.PresencePing));
+            Assert.Equal(MessageType.PresencePong, (await ch.ReceiveAsync().WithTimeout()).Type);
+            Assert.True(session.IsRunning);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_Sends_Keep_Frames_In_Nonce_Order()
+    {
+        // Several files + clipboard sent at once over one channel: with counter
+        // nonces, any interleaving bug between encrypt and send breaks decryption.
+        var phone = DeviceIdentity.Generate();
+        await PairAsync(phone);
+        var (ch, session) = await StartSessionAsync(phone);
+        await using (ch)
+        {
+            var dir = Loopback.TempDir();
+            var sends = Enumerable.Range(0, 4).Select(i =>
+            {
+                var path = Path.Combine(dir, $"f{i}.bin");
+                File.WriteAllBytes(path, Enumerable.Range(0, FileTransferService.ChunkSize * 3 + i).Select(b => (byte)(b + i)).ToArray());
+                return Task.Run(() => session.SendFileAsync(path));
+            }).ToList();
+            for (var i = 0; i < 20; i++) _pcClipboard.SimulateLocalCopy($"clip {i}");
+
+            int ends = 0, clips = 0;
+            while (ends < 4 || clips < 20)
+            {
+                var m = await ch.ReceiveAsync().WithTimeout(); // throws if any frame is out of order
+                if (m.Type == MessageType.FileEnd) ends++;
+                if (m.Type == MessageType.ClipboardUpdate) clips++;
+            }
+            foreach (var s in sends) Assert.Equal(TransferStatus.Completed, (await s.WithTimeout()).Status);
+        }
+    }
 
     private sealed class FakeClipboard : IClipboardAccess
     {

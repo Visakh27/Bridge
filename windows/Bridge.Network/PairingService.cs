@@ -75,7 +75,7 @@ public sealed class PairingService
         lock (_gate)
         {
             if (_activeToken is null || _time.GetUtcNow() > _tokenExpiresAt)
-                rejection = "Pairing code expired. Generate a new code on the PC.";
+                rejection = "Pairing code expired or already used. Generate a new code on the PC.";
             else if (!CryptographicOperations.FixedTimeEquals(
                          Encoding.UTF8.GetBytes(payload.PairingToken ?? string.Empty), Encoding.UTF8.GetBytes(_activeToken)))
                 rejection = "Invalid pairing code";

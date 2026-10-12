@@ -58,12 +58,18 @@ cd android
   host tests over loopback TCP: pair → reconnect → files/clipboard/status,
   impersonation and revocation.
 - `android/app/src/test` (JUnit, runs on the JVM) — protocol (de)serialization,
-  envelope fields, safe file names, crypto and signatures.
+  envelope fields, safe file names, crypto and signatures, plus phone-side
+  failure paths against `TestPc` (a minimal PC written from protocol.md):
+  pairing timeouts and friendly errors, the dead-PC watchdog, a PC that
+  rejects a file mid-upload, and a PC that can't prove its key.
 - Cross-platform: the handshake, crypto and messages were verified by running
   the Windows `BridgeHost` against the Android `PairingClient` /
   `BridgeClientSession` over TCP (pairing, forged-PC rejection, wrong and
   reused tokens, files and clipboard in both directions, status,
-  notifications, reconnect, impostor rejection and revocation).
+  notifications, reconnect, impostor rejection and revocation; 20 MB and
+  empty files both ways, a cancelled upload, nine concurrent uploads against
+  the PC's limit of eight, and JSON-schema validation of real messages from
+  both platforms).
 - Manual/integration still needed on real devices: camera QR scanning,
   reconnection after Wi‑Fi drop, large-file transfer, clipboard sync across a
   few Android OEMs, Windows notifications and tray behaviour.

@@ -70,6 +70,8 @@ public sealed class ClipboardSyncService
         }
         catch (Exception ex)
         {
+            // Not delivered: forget it so copying the same text again retries.
+            lock (_gate) { if (_lastSynced == newText) _lastSynced = null; }
             SendFailed?.Invoke(ex);
         }
     }

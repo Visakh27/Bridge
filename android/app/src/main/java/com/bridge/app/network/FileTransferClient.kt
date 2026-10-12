@@ -51,21 +51,33 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
         var bytesWritten: Long = 0,
     )
 
-    private val cancelledTransfers = ConcurrentHashMap.newKeySet<String>()
-    private val awaitingAck = ConcurrentHashMap<String, TransferProgress>()
+    /**
+     * An outgoing transfer, kept from file.start until the receiver's file.ack.
+     * The receiver may ack early (rejecting file.start, or failing mid-transfer);
+     * that verdict stops the sender instead of being ignored.
+     */
+    private class Outgoing(@Volatile var progress: TransferProgress) {
+        @Volatile var userCancelled = false
+        var peerVerdict: String? = null // non-ok file.ack status (or peer file.cancel)
+        var finished = false            // sender loop has returned
+    }
+
+    private val outgoing = ConcurrentHashMap<String, Outgoing>()
     private val incoming = mutableMapOf<String, Incoming>() // only touched by the session's receive loop
 
-    /** Sends a file; returns the final status instead of throwing for I/O problems or cancellation. */
+    /** Sends a file; returns the final status instead of throwing for I/O problems, rejection or user cancellation. */
     suspend fun sendFile(channel: EncryptedChannel, file: File, displayName: String = file.name): TransferProgress {
         val transferId = UUID.randomUUID().toString()
-        var progress = TransferProgress(transferId, displayName, TransferDirection.SENDING)
+        val state = Outgoing(TransferProgress(transferId, displayName, TransferDirection.SENDING))
+        outgoing[transferId] = state
         var started = false
+        var status: TransferStatus
         try {
             val size = file.length()
             val hash = withContext(Dispatchers.IO) { FileHasher.sha256HexOfFile(file.path) }
             val totalChunks = ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()
-            progress = progress.copy(totalChunks = totalChunks)
-            onProgress(progress)
+            state.progress = state.progress.copy(totalChunks = totalChunks)
+            onProgress(state.progress)
 
             channel.send(BridgeMessage.create(MessageType.FILE_START,
                 FileStartPayload(transferId, displayName, size, hash, totalChunks)))
@@ -74,35 +86,54 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
             withContext(Dispatchers.IO) { file.inputStream().buffered(CHUNK_SIZE) }.use { input ->
                 val buffer = ByteArray(CHUNK_SIZE)
                 for (index in 0 until totalChunks) {
-                    if (transferId in cancelledTransfers) throw CancellationException("Cancelled by user")
+                    if (state.userCancelled || synchronized(state) { state.peerVerdict != null }) break
                     val read = withContext(Dispatchers.IO) { readFully(input, buffer) }
                     if (read == 0) throw IOException("File shrank while it was being sent")
                     val chunkB64 = Base64.getEncoder().encodeToString(buffer.copyOf(read))
                     channel.send(BridgeMessage.create(MessageType.FILE_CHUNK, FileChunkPayload(transferId, index, chunkB64)))
-                    progress = progress.copy(chunksDone = index + 1)
-                    onProgress(progress)
+                    state.progress = state.progress.copy(chunksDone = index + 1)
+                    onProgress(state.progress)
                 }
             }
 
-            progress = progress.copy(status = TransferStatus.COMPLETED)
-            awaitingAck[transferId] = progress
-            channel.send(BridgeMessage.create(MessageType.FILE_END, FileEndPayload(transferId)))
-        } catch (e: CancellationException) {
-            progress = progress.copy(status = TransferStatus.CANCELLED)
-            if (started) trySendCancel(channel, transferId)
-            if (transferId !in cancelledTransfers) { onProgress(progress); throw e } // coroutine itself cancelled
+            status = if (state.userCancelled) TransferStatus.CANCELLED else {
+                if (synchronized(state) { state.peerVerdict == null }) {
+                    channel.send(BridgeMessage.create(MessageType.FILE_END, FileEndPayload(transferId)))
+                }
+                TransferStatus.COMPLETED
+            }
         } catch (e: IOException) {
-            progress = progress.copy(status = TransferStatus.FAILED)
+            status = TransferStatus.FAILED
+        } catch (e: CancellationException) {
+            // Our coroutine is being cancelled (service stopping): clean up, then propagate.
+            finish(state, TransferStatus.CANCELLED)
             if (started) trySendCancel(channel, transferId)
-        } finally {
-            cancelledTransfers.remove(transferId)
-            if (progress.status != TransferStatus.COMPLETED) awaitingAck.remove(transferId)
+            outgoing.remove(transferId)
+            throw e
         }
-        onProgress(progress)
-        return progress
+
+        val peerAborted = finish(state, status)
+        // Tell the receiver to drop its partial file, unless it already gave up on its own.
+        if (started && !peerAborted && state.progress.status != TransferStatus.COMPLETED) trySendCancel(channel, transferId)
+        if (state.progress.status != TransferStatus.COMPLETED) outgoing.remove(transferId) // else: await file.ack
+        onProgress(state.progress)
+        return state.progress
     }
 
-    fun cancelTransfer(transferId: String) { cancelledTransfers.add(transferId) }
+    /** Marks the sender finished and settles its status; returns true if the peer had already aborted. */
+    private fun finish(state: Outgoing, status: TransferStatus): Boolean = synchronized(state) {
+        state.finished = true
+        val verdict = state.peerVerdict
+        state.progress = state.progress.copy(status = if (verdict != null) statusFor(verdict) else status)
+        verdict != null
+    }
+
+    fun cancelTransfer(transferId: String) {
+        outgoing[transferId]?.userCancelled = true
+    }
+
+    private fun statusFor(ackStatus: String) =
+        if (ackStatus == FileAckStatus.CANCELLED) TransferStatus.CANCELLED else TransferStatus.FAILED
 
     /** Feed every incoming file.* message here; completed files land in [downloadDir]. */
     suspend fun handleIncoming(channel: EncryptedChannel, message: BridgeMessage, downloadDir: File): TransferProgress? {
@@ -116,10 +147,16 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
                     return null
                 }
                 val safeName = SafeFileName.sanitize(meta.fileName)
-                val state = withContext(Dispatchers.IO) {
-                    downloadDir.mkdirs()
-                    val temp = File(downloadDir, ".bridge-${UUID.randomUUID()}.part")
-                    Incoming(meta, safeName, temp, FileOutputStream(temp))
+                val state = try {
+                    withContext(Dispatchers.IO) {
+                        downloadDir.mkdirs()
+                        val temp = File(downloadDir, ".bridge-${UUID.randomUUID()}.part")
+                        Incoming(meta, safeName, temp, FileOutputStream(temp))
+                    }
+                } catch (e: IOException) {
+                    // Can't store it (storage full, unmounted): tell the sender now.
+                    channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(meta.transferId, FileAckStatus.CANCELLED)))
+                    return report(TransferProgress(meta.transferId, safeName, TransferDirection.RECEIVING, TransferStatus.FAILED))
                 }
                 incoming[meta.transferId] = state
                 report(TransferProgress(meta.transferId, safeName, TransferDirection.RECEIVING, totalChunks = meta.totalChunks))
@@ -161,29 +198,44 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
             }
             MessageType.FILE_CANCEL -> {
                 val cancel = message.payloadAs<FileCancelPayload>()
-                cancelTransfer(cancel.transferId) // the PC may be cancelling something we're sending…
+                outgoing[cancel.transferId]?.let { o -> // the PC may be cancelling something we're sending…
+                    synchronized(o) { if (!o.finished) o.peerVerdict = FileAckStatus.CANCELLED }
+                }
                 val state = incoming.remove(cancel.transferId) ?: return null // …or something it was sending us
                 withContext(Dispatchers.IO) { state.stream.close(); state.temp.delete() }
                 report(finished(state, TransferStatus.CANCELLED))
             }
             MessageType.FILE_ACK -> {
                 val ack = message.payloadAs<FileAckPayload>()
-                val sent = awaitingAck.remove(ack.transferId) ?: return null
-                if (ack.status == FileAckStatus.OK) sent
-                else report(sent.copy(status = if (ack.status == FileAckStatus.CANCELLED) TransferStatus.CANCELLED else TransferStatus.FAILED))
+                val o = outgoing[ack.transferId] ?: return null
+                if (ack.status == FileAckStatus.OK) {
+                    outgoing.remove(ack.transferId)
+                    return o.progress
+                }
+                synchronized(o) {
+                    o.peerVerdict = ack.status
+                    if (!o.finished) return null // still sending: it stops at the next chunk and reports the verdict
+                    o.progress = o.progress.copy(status = statusFor(ack.status))
+                }
+                outgoing.remove(ack.transferId)
+                report(o.progress)
             }
             else -> null
         }
     }
 
-    /** Drops every partially received file (call when the session ends). */
-    fun abortIncoming() {
+    /** Call when the session ends: drops partially received files and stops outgoing sends. */
+    fun abortAll() {
         for (state in incoming.values) {
             runCatching { state.stream.close() }
             state.temp.delete()
             report(finished(state, TransferStatus.FAILED))
         }
         incoming.clear()
+        for ((id, o) in outgoing) {
+            synchronized(o) { if (!o.finished) o.peerVerdict = FileAckStatus.CANCELLED }
+            if (o.progress.status == TransferStatus.COMPLETED) outgoing.remove(id) // sent; its ack was lost
+        }
     }
 
     private suspend fun failIncoming(channel: EncryptedChannel, state: Incoming): TransferProgress {

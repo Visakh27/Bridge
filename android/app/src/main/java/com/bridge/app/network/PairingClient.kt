@@ -2,9 +2,13 @@ package com.bridge.app.network
 
 import com.bridge.app.protocol.*
 import com.bridge.app.security.IdentityKey
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.Serializable
+import java.io.IOException
+import java.security.GeneralSecurityException
 import java.util.Base64
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 
 /** The PC this phone is paired with, plus where to reach it. */
 @Serializable
@@ -32,6 +36,7 @@ class PairingClient(
     private val identity: IdentityKey,
     private val store: PairedDeviceStore,
     private val connect: suspend (host: String, port: Int) -> TcpTransport = TcpTransport::connect,
+    private val timeoutMs: Long = 20_000,
 ) {
 
     suspend fun pairFromQrContent(qrJson: String, deviceName: String): Result<PairingResult> = runCatching {
@@ -46,12 +51,25 @@ class PairingClient(
             throw PairingException("That isn't a Bridge pairing code", e)
         }
 
-        val transport = connect(qr.host, qr.port)
-        val channel = try {
-            EncryptedChannel.handshakeAsInitiator(transport, identity, pcKey)
+        try {
+            withTimeout(timeoutMs) { pair(qr, pcKey, deviceName) }
         } catch (e: AuthenticationException) {
             throw PairingException("Couldn't verify the PC. Make sure you scanned the code on your own PC.", e)
+        } catch (e: TimeoutCancellationException) {
+            throw PairingException("The PC didn't respond. Make sure Bridge is open on ${qr.deviceName}.", e)
+        } catch (e: IOException) {
+            // Raw socket errors are never shown to the user (docs/architecture.md).
+            throw PairingException("Couldn't reach ${qr.deviceName}. Make sure Bridge is open on the PC and both devices are on the same Wi-Fi.", e)
+        } catch (e: GeneralSecurityException) {
+            throw PairingException("The connection to the PC was interrupted. Please try again.", e)
+        } catch (e: MalformedMessageException) {
+            throw PairingException("The PC sent an unexpected reply. Make sure both apps are up to date.", e)
         }
+    }
+
+    private suspend fun pair(qr: PairingQrPayload, pcKey: ByteArray, deviceName: String): PairingResult {
+        val transport = connect(qr.host, qr.port)
+        val channel = EncryptedChannel.handshakeAsInitiator(transport, identity, pcKey)
 
         try {
             if (channel.peerDeviceId != qr.deviceId) throw PairingException("Connected to a different PC than the code belongs to")
@@ -67,7 +85,7 @@ class PairingClient(
                     if (accept.publicKeyBase64 != qr.publicKeyBase64) throw PairingException("PC identity changed during pairing")
                     val device = PairedDevice(qr.deviceId, accept.deviceName, qr.publicKeyBase64, qr.host, qr.port)
                     store.save(device)
-                    PairingResult(device)
+                    return PairingResult(device)
                 }
                 MessageType.PAIRING_REJECT -> throw PairingException(response.payloadAs<PairingRejectPayload>().reason)
                 else -> throw PairingException("Unexpected response during pairing: ${response.type}")

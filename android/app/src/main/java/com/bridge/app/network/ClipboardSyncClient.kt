@@ -41,6 +41,10 @@ class ClipboardSyncClient(private val clipboard: ClipboardAccess, private val sc
         }
         scope.launch {
             runCatching { ch.send(BridgeMessage.create(MessageType.CLIPBOARD_UPDATE, ClipboardUpdatePayload("text", newText))) }
+                .onFailure {
+                    // Not delivered: forget it so copying the same text again retries.
+                    synchronized(lock) { if (lastSynced == newText) lastSynced = null }
+                }
         }
     }
 

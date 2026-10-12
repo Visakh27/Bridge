@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Bridge.Network;
 
-namespace Bridge.Windows;
+namespace Bridge.Core;
 
 /// <summary>
 /// Simple JSON-file-backed IPairedDeviceStore (SQLite is the recommended

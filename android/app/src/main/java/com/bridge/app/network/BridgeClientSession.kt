@@ -61,6 +61,7 @@ class BridgeClientSession(
      * @throws IOException connection failures.
      */
     suspend fun run() {
+        var peerFeatures = emptyList<String>()
         val ch = try { withTimeout(SETUP_TIMEOUT_MS) {
             val transport = connect(pc.host, pc.port)
             val ch = EncryptedChannel.handshakeAsInitiator(transport, identity, pc.publicKey())
@@ -69,9 +70,7 @@ class BridgeClientSession(
                 val reply = ch.receive()
                 when (reply.type) {
                     MessageType.CAPABILITIES_ADVERTISE -> {
-                        val features = reply.payloadAs<CapabilitiesPayload>().features
-                        clipboard.peerSupportsClipboard = Features.CLIPBOARD in features
-                        listener.onConnected(features)
+                        peerFeatures = reply.payloadAs<CapabilitiesPayload>().features
                     }
                     MessageType.ERROR -> {
                         val error = reply.payloadAs<ErrorPayload>()
@@ -90,9 +89,13 @@ class BridgeClientSession(
             throw IOException("Timed out connecting to ${pc.deviceName}", e)
         }
 
+        // Publish the channel *before* announcing the connection, so anything the
+        // listener (or the UI it updates) sends straight away isn't dropped.
         channel = ch
+        clipboard.peerSupportsClipboard = Features.CLIPBOARD in peerFeatures
         clipboard.channel = ch
         lastSeen = System.currentTimeMillis()
+        listener.onConnected(peerFeatures)
         try {
             coroutineScope {
                 val keepAlive = launch { keepAliveLoop(ch) }
@@ -108,7 +111,7 @@ class BridgeClientSession(
             channel = null
             if (clipboard.channel === ch) clipboard.channel = null
             ch.close()
-            fileTransfer.abortIncoming()
+            fileTransfer.abortAll()
             listener.onDisconnected()
         }
     }
