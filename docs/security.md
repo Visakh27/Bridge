@@ -29,8 +29,16 @@
    reports success. Incoming file names are reduced to a safe leaf name
    (no `..`, separators, drive letters, control or invisible format
    characters such as the right-to-left override, or reserved Windows names),
-   shortened to fit the filesystem, and never overwrite an existing file. Partial files use a random
-   local temp name and are deleted on failure or disconnect.
+   shortened to fit the filesystem, and never overwrite an existing file. Folder
+   paths in folder transfers get the same treatment per segment (no `..`,
+   at most 16 levels, always inside the download folder).
+   Partial files use a random local temp name; non-resumable ones are deleted
+   on failure or disconnect.
+   **Resumable partials** are kept for 24 h in a hidden `.bridge-partial`
+   folder, keyed by the sending device, so another paired device can't pick up
+   or append to them; at most 32 per device. The whole-file SHA-256 check at
+   the end still covers chunks received on earlier connections, and a re-offer
+   is answered "already received" only for the same transfer id *and* hash.
 6. **Clipboard** — never written to disk or logs. Sync is opt-in (off by
    default), text-only, capped at 10,000 characters, skips content that looks
    like keys or passwords, and suppresses echo loops.

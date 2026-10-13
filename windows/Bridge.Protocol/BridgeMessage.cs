@@ -22,6 +22,7 @@ public static class MessageType
     public const string FileEnd = "file.end";
     public const string FileAck = "file.ack";
     public const string FileCancel = "file.cancel";
+    public const string FileResume = "file.resume";
     public const string NotificationPost = "notification.post";
     public const string NotificationDismiss = "notification.dismiss";
     public const string Error = "error";
@@ -34,6 +35,10 @@ public static class Features
     public const string Clipboard = "clipboard";
     public const string Notifications = "notifications";
     public const string Photos = "photos";
+    /// <summary>Interrupted transfers continue where they stopped (file.resume).</summary>
+    public const string FilesResume = "files.resume";
+    /// <summary>Folder transfers (file.start relativePath / batch fields).</summary>
+    public const string FilesFolders = "files.folders";
 }
 
 /// <summary>Error codes carried in error messages (docs/architecture.md).</summary>
@@ -115,6 +120,8 @@ public static class BridgeJson
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+        // Optional fields that are null are left off the wire entirely.
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
         // Wire JSON is never embedded in HTML, so don't escape '+', '<', etc.
         // (the default turns every '+' in base64 into "\u002B", bloating
         // frames, discovery datagrams and the pairing QR code).

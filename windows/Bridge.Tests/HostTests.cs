@@ -170,7 +170,7 @@ public sealed class HostTests : IDisposable
         var (ch, _) = await StartSessionAsync(phone);
         await using (ch)
         {
-            await ch.SendAsync(BridgeMessage.Create(MessageType.FileStart, new FileStartPayload("t-2", "a.bin", 10, "00", 2)));
+            await ch.SendAsync(BridgeMessage.Create(MessageType.FileStart, new FileStartPayload("t-2", "a.bin", 70_000, "00", 2)));
             await ch.SendAsync(BridgeMessage.Create(MessageType.FileChunk, new FileChunkPayload("t-2", 1, Convert.ToBase64String(new byte[5]))));
             var ack = await ch.ReceiveAsync().WithTimeout();
             Assert.Equal(FileAckStatus.HashMismatch, ack.PayloadAs<FileAckPayload>().Status);

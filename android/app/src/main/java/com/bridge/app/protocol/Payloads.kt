@@ -8,7 +8,27 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class ClipboardUpdatePayload(val format: String, val data: String)
 
-@Serializable data class FileStartPayload(val transferId: String, val fileName: String, val size: Long, val sha256: String, val totalChunks: Int)
+/**
+ * Announces a file. Optional fields are omitted when null: [resumable] — the
+ * sender waits for file.resume before chunks (peer advertised files.resume);
+ * [relativePath] — the file's folder inside a folder transfer ('/'-separated,
+ * no file name); [batchId]/[batchIndex]/[batchCount] — groups one folder transfer.
+ */
+@Serializable data class FileStartPayload(
+    val transferId: String,
+    val fileName: String,
+    val size: Long,
+    val sha256: String,
+    val totalChunks: Int,
+    val resumable: Boolean? = null,
+    val relativePath: String? = null,
+    val batchId: String? = null,
+    val batchIndex: Int? = null,
+    val batchCount: Int? = null,
+)
+
+/** Receiver → sender: continue from chunk [nextIndex] (0 = from the start). */
+@Serializable data class FileResumePayload(val transferId: String, val nextIndex: Int)
 
 @Serializable data class FileChunkPayload(val transferId: String, val index: Int, val data: String)
 
@@ -55,6 +75,10 @@ object Features {
     const val CLIPBOARD = "clipboard"
     const val NOTIFICATIONS = "notifications"
     const val PHOTOS = "photos"
+    /** Interrupted transfers continue where they stopped (file.resume). */
+    const val FILES_RESUME = "files.resume"
+    /** Folder transfers (file.start relativePath / batch fields). */
+    const val FILES_FOLDERS = "files.folders"
 }
 
 object ErrorCodes {

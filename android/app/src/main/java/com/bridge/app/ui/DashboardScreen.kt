@@ -3,6 +3,9 @@ package com.bridge.app.ui
 import android.content.ComponentName
 import android.content.Intent
 import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.bridge.app.notifications.BridgeNotificationListener
@@ -38,6 +42,18 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     var confirmForget by remember { mutableStateOf(false) }
+    // Android's share sheet can't share folders, so folders go through the system folder picker.
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val service = BridgeConnectionService.instance
+        if (service == null) {
+            Toast.makeText(context, "Bridge isn't connected to your PC right now.", Toast.LENGTH_LONG).show()
+        } else {
+            service.sendFolder(uri) { message ->
+                ContextCompat.getMainExecutor(context).execute { Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(24.dp)) {
         val pc = state.pcName ?: "your PC"
@@ -81,6 +97,11 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
 
         Spacer(Modifier.height(24.dp))
         Text("Share a file to Bridge from any app to send it to your PC.", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            enabled = state.status == BridgeConnectionService.Status.CONNECTED,
+            onClick = { pickFolder.launch(null) },
+        ) { Text("Send a folder") }
 
         Spacer(Modifier.weight(1f))
         TextButton(onClick = { confirmForget = true }) { Text("Forget this PC") }

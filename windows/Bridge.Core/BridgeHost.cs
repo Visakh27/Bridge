@@ -17,7 +17,7 @@ namespace Bridge.Core;
 /// </summary>
 public sealed class BridgeHost : IAsyncDisposable
 {
-    public static readonly string[] LocalFeatures = [Features.Files, Features.Clipboard, Features.Notifications];
+    public static readonly string[] LocalFeatures = [Features.Files, Features.Clipboard, Features.Notifications, Features.FilesResume, Features.FilesFolders];
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan FirstMessageTimeout = TimeSpan.FromSeconds(30);
 

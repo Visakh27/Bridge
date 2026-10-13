@@ -12,9 +12,11 @@ import java.util.UUID
  * sent, as message.schema.json requires; `ignoreUnknownKeys` lets a newer
  * Windows peer add payload fields without breaking this client.
  */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 val BridgeJson: Json = Json {
     encodeDefaults = true
     ignoreUnknownKeys = true
+    explicitNulls = false // optional fields that are null are left off the wire, like the Windows side
 }
 
 @Serializable

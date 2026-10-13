@@ -23,7 +23,7 @@ public sealed partial class MainWindow : Window
     private const string NotificationGroup = "bridge";
 
     private readonly PairingService _pairing;
-    private readonly FileTransferService _fileTransfer = new();
+    private readonly FileTransferService _fileTransfer;
     private readonly ClipboardSyncService _clipboard;
     private readonly TcpBridgeListener _listener;
     private readonly DiscoveryResponder? _discovery;
@@ -39,6 +39,8 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Bridge");
+        // Unfinished sends/receives survive reconnects and app restarts (24 h).
+        _fileTransfer = new FileTransferService(new TransferStateStore(dataDir));
         var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "identity.bin"));
         var store = new JsonPairedDeviceStore(Path.Combine(dataDir, "paired_devices.json"));
         _pairing = new PairingService(identity, store, Environment.MachineName);
@@ -157,27 +159,36 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            var verb = progress.Direction == TransferDirection.Sending ? "Sending" : "Receiving";
+            var sending = progress.Direction == TransferDirection.Sending;
+            var verb = sending ? "Sending" : "Receiving";
+            // Folder transfers: "Holiday — file 12 of 340: IMG_0012.jpg"
+            var name = progress.BatchCount is { } count && progress.BatchIndex is { } index
+                ? $"{progress.RelativePath?.Split('/')[0]} — file {index + 1} of {count}: {progress.FileName}"
+                : progress.FileName;
             switch (progress.Status)
             {
                 case TransferStatus.InProgress:
                     TransferProgressBar.Visibility = Visibility.Visible;
                     TransferProgressBar.Value = progress.Fraction;
-                    TransferText.Text = $"{verb} {progress.FileName}…";
+                    TransferText.Text = progress.ResumedFrom > 0 ? $"Resuming {name} ({progress.Fraction:P0})…" : $"{verb} {name}…";
                     break;
                 case TransferStatus.Completed:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
-                    TransferText.Text = progress.Direction == TransferDirection.Sending
-                        ? $"Sent {progress.FileName}"
+                    TransferText.Text = sending
+                        ? $"Sent {name}"
                         : $"Saved {Path.GetFileName(progress.SavedPath ?? progress.FileName)} to Downloads\\Bridge";
+                    break;
+                case TransferStatus.Interrupted:
+                    TransferProgressBar.Visibility = Visibility.Collapsed;
+                    TransferText.Text = $"{name} paused at {progress.Fraction:P0} — it will continue when the phone reconnects.";
                     break;
                 case TransferStatus.Failed:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
-                    TransferText.Text = $"{progress.FileName} didn't transfer correctly. Please try again.";
+                    TransferText.Text = $"{name} didn't transfer correctly. Please try again.";
                     break;
                 case TransferStatus.Cancelled:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
-                    TransferText.Text = $"{progress.FileName} was cancelled.";
+                    TransferText.Text = $"{name} was cancelled.";
                     break;
             }
         });
@@ -201,8 +212,11 @@ public sealed partial class MainWindow : Window
             var items = await e.DataView.GetStorageItemsAsync();
             foreach (var item in items)
             {
+                // Both report status via ProgressChanged and don't throw for I/O.
                 if (item is global::Windows.Storage.StorageFile file)
-                    await session.SendFileAsync(file.Path); // reports status via ProgressChanged, doesn't throw for I/O
+                    await session.SendFileAsync(file.Path);
+                else if (item is global::Windows.Storage.StorageFolder folder)
+                    await session.SendFolderAsync(folder.Path);
             }
         }
         catch (Exception)
@@ -267,6 +281,7 @@ public sealed partial class MainWindow : Window
         _qrTimer.Stop();
         _cts.Cancel();
         _discovery?.Dispose();
+        _fileTransfer.State.Dispose(); // write any pending resume state before exiting
         await _host.DisposeAsync();
         _listener.Dispose();
     }

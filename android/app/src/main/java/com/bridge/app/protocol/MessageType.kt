@@ -15,6 +15,7 @@ object MessageType {
     const val FILE_END = "file.end"
     const val FILE_ACK = "file.ack"
     const val FILE_CANCEL = "file.cancel"
+    const val FILE_RESUME = "file.resume"
     const val NOTIFICATION_POST = "notification.post"
     const val NOTIFICATION_DISMISS = "notification.dismiss"
     const val ERROR = "error"

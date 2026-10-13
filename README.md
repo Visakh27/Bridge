@@ -1,11 +1,13 @@
 # Bridge — Android ↔ Windows Continuity Platform
 
 Working implementation of the "Recommended First Build" vertical slice from
-the product blueprint: QR pairing, local TCP discovery, an ephemeral-ECDH +
-AES-256-GCM encrypted channel, bidirectional chunked/hash-verified file
-transfer, text clipboard sync, a Windows system-tray app, an Android
-foreground connection service, and notification mirroring — all speaking one
-shared, versioned JSON protocol (`protocol/protocol.md`).
+the product blueprint: QR pairing, a mutually authenticated ephemeral-ECDH +
+AES-256-GCM encrypted channel over local TCP, private local discovery of a
+paired PC whose address changed, bidirectional chunked/hash-verified file and
+folder transfer that resumes after a dropped connection, text clipboard sync,
+a Windows system-tray app, an Android foreground connection service, and
+notification mirroring — all speaking one shared, versioned JSON protocol
+(`protocol/protocol.md`).
 
 ```
 bridge/

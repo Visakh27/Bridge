@@ -35,7 +35,7 @@
                 <TextBlock x:Name="BatteryText" Opacity="0.8" />
                 <Border AllowDrop="True" Background="{ThemeResource ControlFillColorDefaultBrush}"
                         CornerRadius="8" Height="180" Drop="OnFileDrop" DragOver="OnDragOver">
-                    <TextBlock Text="Drop files here to send to your phone"
+                    <TextBlock Text="Drop files or folders here to send to your phone"
                                HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7" />
                 </Border>
                 <ProgressBar x:Name="TransferProgressBar" Minimum="0" Maximum="1" Visibility="Collapsed" />

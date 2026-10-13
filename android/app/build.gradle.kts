@@ -62,6 +62,9 @@ dependencies {
     // JSON
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
+    // Reading folders picked with the system folder picker (folder transfer)
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
     // WorkManager for background reconnect scheduling
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 

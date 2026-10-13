@@ -89,7 +89,8 @@ class BridgeConnectionService : Service() {
         instance = this
         store = SharedPrefsPairedDeviceStore(this)
         network = LocalNetworkMonitor(this)
-        fileTransfer = FileTransferClient(::onTransferProgress)
+        // Unfinished sends/receives survive reconnects and app restarts (24 h).
+        fileTransfer = FileTransferClient(TransferStateStore(File(filesDir, "bridge-state")), ::onTransferProgress)
         clipboardSync = ClipboardSyncClient(AndroidClipboardAccess(this), scope).apply {
             enabled = isClipboardSyncEnabled(this@BridgeConnectionService)
         }
@@ -165,14 +166,20 @@ class BridgeConnectionService : Service() {
     private fun downloadDir(): File = File(getExternalFilesDir(null) ?: filesDir, "Bridge")
 
     private fun onTransferProgress(progress: TransferProgress) {
-        val verb = if (progress.direction == TransferDirection.SENDING) "Sending" else "Receiving"
+        val sending = progress.direction == TransferDirection.SENDING
+        val verb = if (sending) "Sending" else "Receiving"
+        // Folder transfers: "Holiday — file 12 of 340: IMG_0012.jpg"
+        val count = progress.batchCount
+        val index = progress.batchIndex
+        val name = if (count != null && index != null)
+            "${progress.relativePath?.substringBefore('/')} — file ${index + 1} of $count: ${progress.fileName}" else progress.fileName
+        val percent = (progress.fraction * 100).toInt()
         val text = when (progress.status) {
-            TransferStatus.IN_PROGRESS -> "$verb ${progress.fileName} (${(progress.fraction * 100).toInt()}%)"
-            TransferStatus.COMPLETED ->
-                if (progress.direction == TransferDirection.SENDING) "Sent ${progress.fileName}"
-                else "Received ${progress.savedFile?.name ?: progress.fileName}"
-            TransferStatus.FAILED -> "${progress.fileName} didn't transfer correctly"
-            TransferStatus.CANCELLED -> "${progress.fileName} was cancelled"
+            TransferStatus.IN_PROGRESS -> if (progress.resumedFrom > 0) "Resuming $name ($percent%)" else "$verb $name ($percent%)"
+            TransferStatus.COMPLETED -> if (sending) "Sent $name" else "Received ${progress.savedFile?.name ?: name}"
+            TransferStatus.INTERRUPTED -> "$name paused at $percent% — it will continue when the PC is back"
+            TransferStatus.FAILED -> "$name didn't transfer correctly"
+            TransferStatus.CANCELLED -> "$name was cancelled"
         }
         _state.update { it.copy(lastTransfer = text) }
     }
@@ -183,16 +190,43 @@ class BridgeConnectionService : Service() {
     }
 
     /** Sends a file to the PC; [deleteAfter] removes a temporary copy afterwards. Returns false if not connected. */
+    /**
+     * Sends a file to the PC. With [deleteAfter] the file is a private copy that is
+     * removed once the send is finished (kept while an interrupted send waits to
+     * resume). Returns false if not connected.
+     */
     fun sendFile(file: File, displayName: String = file.name, deleteAfter: Boolean = false): Boolean {
         val s = session
         if (s == null || !s.isConnected) {
             if (deleteAfter) file.delete()
             return false
         }
-        scope.launch {
-            try { s.sendFile(file, displayName) } finally { if (deleteAfter) file.delete() }
-        }
+        scope.launch { s.sendFile(file, displayName, deleteWhenDone = deleteAfter) }
         return true
+    }
+
+    /**
+     * Sends a folder picked with the system folder picker. Android's storage
+     * framework only allows reading it through content URIs, so each file is
+     * copied to private cache first (needs free space about the folder's size);
+     * copies are deleted as each file is confirmed. Returns false if not connected
+     * or there isn't room.
+     */
+    fun sendFolder(treeUri: android.net.Uri, onResult: (String) -> Unit) {
+        val s = session
+        if (s == null || !s.isConnected) { onResult("Bridge isn't connected to your PC right now."); return }
+        scope.launch {
+            val items = try {
+                FolderCopier(this@BridgeConnectionService).copy(treeUri)
+            } catch (e: Exception) {
+                onResult(e.message ?: "Couldn't read that folder.")
+                return@launch
+            }
+            if (items.isEmpty()) { onResult("That folder has no files to send."); return@launch }
+            onResult("Sending ${items.size} files to your PC…")
+            val results = s.sendFolder(items)
+            if (results == null) items.forEach { it.file.delete() }
+        }
     }
 
     private fun buildNotification(text: String): Notification =
@@ -210,6 +244,7 @@ class BridgeConnectionService : Service() {
     override fun onDestroy() {
         instance = null
         network.stop()
+        fileTransfer.state.close() // write any pending resume state
         scope.cancel()
         session?.close()
         if (_state.value.status != Status.UNPAIRED) _state.update { it.copy(status = Status.DISCONNECTED) }
