@@ -27,7 +27,13 @@ public static class SafeFileName
 
         var invalid = Path.GetInvalidFileNameChars().Concat(['<', '>', ':', '"', '|', '?', '*']).ToHashSet();
         var sb = new StringBuilder(leaf.Length);
-        foreach (var c in leaf) sb.Append(char.IsControl(c) || invalid.Contains(c) ? '_' : c);
+        foreach (var c in leaf)
+        {
+            // Invisible format characters (RTL override U+202E, zero-width spaces,
+            // BOM…) are dropped: "photo\u202Egnp.exe" would display as "photoexe.png".
+            if (char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format) continue;
+            sb.Append(char.IsControl(c) || invalid.Contains(c) ? '_' : c);
+        }
 
         // Windows ignores trailing dots/spaces, which can be used to alias names.
         var cleaned = sb.ToString().Trim().TrimEnd('.', ' ');
@@ -40,7 +46,9 @@ public static class SafeFileName
         {
             var ext = Path.GetExtension(cleaned);
             if (ext.Length > 20) ext = string.Empty;
-            cleaned = cleaned[..(MaxLength - ext.Length)] + ext;
+            var cut = MaxLength - ext.Length;
+            if (char.IsLowSurrogate(cleaned[cut])) cut--; // never split a surrogate pair
+            cleaned = cleaned[..cut] + ext;
         }
         return cleaned;
     }

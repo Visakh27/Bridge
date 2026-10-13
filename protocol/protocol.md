@@ -18,8 +18,11 @@ unknown keys and unknown message types.
 
 ## Transport framing
 
-Every frame on the TCP connection is `[4-byte big-endian length][bytes]`
-(maximum 16 MiB). The PC listens on TCP **47820** (falling back to a free
+Every frame on the TCP connection is `[4-byte big-endian length][bytes]`.
+Receivers enforce a maximum that grows with trust: **4 KiB** for handshake
+frames, **64 KiB** on the PC until it has verified who the phone is, and
+**16 MiB** once both sides are authenticated. A larger length prefix closes
+the connection without reading the body. The PC listens on TCP **47820** (falling back to a free
 port if that one is taken); the port in use is in the pairing QR code.
 
 ## Keys
@@ -115,6 +118,15 @@ base64 encoding, so each `file.chunk` message stays well under typical socket
 buffer sizes. `file.start.totalChunks` lets the receiver show progress and
 detect truncated transfers (an empty file has `totalChunks: 0`). Receivers
 treat `fileName` as untrusted: only its last path segment is used, unsafe
-characters are replaced, and an existing file is never overwritten
-("name (1).ext"). Out-of-order chunks, more bytes than `size`, or a SHA-256
+characters are replaced, invisible Unicode format characters (such as the
+right-to-left override used to disguise `.exe` as `.png`) are removed, the
+name is shortened to fit the local filesystem (200 UTF-8 bytes on Android,
+200 UTF-16 units on Windows, keeping the extension), and an existing file is
+never overwritten ("name (1).ext"). A receiver that can't store a file (disk
+full, storage removed) answers `file.ack` `cancelled` right away; a sender
+that receives any non-`ok` ack or a `file.cancel` stops sending.
+
+Cancelling a transfer never abandons a frame half-written: an encrypted
+frame consumes a nonce, so senders only stop between frames, then send
+`file.cancel`. Out-of-order chunks, more bytes than `size`, or a SHA-256
 mismatch fail the transfer with `file.ack` `hash_mismatch`.

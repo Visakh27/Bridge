@@ -56,12 +56,18 @@ cd android
   crypto (transcript binding, replay/tamper rejection, signatures), pairing
   rules (token expiry, single use, key proof), safe file names, and end-to-end
   host tests over loopback TCP: pair → reconnect → files/clipboard/status,
-  impersonation and revocation.
+  impersonation and revocation; robustness (randomly timed mid-send
+  cancellation, connection loss during a send, a throwing clipboard, oversized
+  pre-auth frames, idle connection floods, disk failure mid-receive, bidi
+  file-name spoofing).
 - `android/app/src/test` (JUnit, runs on the JVM) — protocol (de)serialization,
   envelope fields, safe file names, crypto and signatures, plus phone-side
   failure paths against `TestPc` (a minimal PC written from protocol.md):
   pairing timeouts and friendly errors, the dead-PC watchdog, a PC that
-  rejects a file mid-upload, and a PC that can't prove its key.
+  rejects a file mid-upload, a PC that can't prove its key, oversized
+  handshake frames, failing handlers, and long non-ASCII file names. Run the
+  JVM with a UTF-8 locale (`LC_ALL=C.UTF-8`); with an ASCII locale Java
+  silently mangles non-ASCII file names and those tests prove nothing.
 - Cross-platform: the handshake, crypto and messages were verified by running
   the Windows `BridgeHost` against the Android `PairingClient` /
   `BridgeClientSession` over TCP (pairing, forged-PC rejection, wrong and

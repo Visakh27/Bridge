@@ -88,7 +88,16 @@ public sealed class ClipboardSyncService
             if (payload.Data == _lastSynced) return;
             _lastSynced = payload.Data; // so the resulting local change event isn't echoed back
         }
-        await _clipboard.WriteTextAsync(payload.Data);
+        try
+        {
+            await _clipboard.WriteTextAsync(payload.Data);
+        }
+        catch
+        {
+            // Not applied: let the same text through if it's sent again.
+            lock (_gate) { if (_lastSynced == payload.Data) _lastSynced = null; }
+            throw;
+        }
     }
 
     /// <summary>Basic heuristic exclusions (section 10): avoid syncing things that look like secrets.</summary>

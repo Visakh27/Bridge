@@ -13,7 +13,10 @@ public sealed class TcpTransport : ITransport
     private readonly NetworkStream _stream;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-    public const int MaxFrameSize = 16 * 1024 * 1024;
+    /// <summary>Largest frame ever accepted (after authentication).</summary>
+    public const int MaxSessionFrameSize = 16 * 1024 * 1024;
+
+    public int MaxFrameSize { get; set; } = MaxSessionFrameSize;
 
     public TcpTransport(TcpClient client)
     {
@@ -61,7 +64,7 @@ public sealed class TcpTransport : ITransport
         var lenBuf = await ReadExactAsync(4, ct);
         if (BitConverter.IsLittleEndian) Array.Reverse(lenBuf);
         var len = BitConverter.ToInt32(lenBuf, 0);
-        if (len is < 0 or > MaxFrameSize)
+        if (len < 0 || len > MaxFrameSize)
             throw new InvalidDataException($"Refusing to read frame of size {len}");
         return await ReadExactAsync(len, ct);
     }

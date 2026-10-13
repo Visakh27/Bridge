@@ -27,8 +27,9 @@
 5. **File integrity and safety** — every transfer's SHA-256 is sent in
    `file.start` and verified against the reassembled file before `file.ack`
    reports success. Incoming file names are reduced to a safe leaf name
-   (no `..`, separators, drive letters, control characters or reserved Windows
-   names) and never overwrite an existing file. Partial files use a random
+   (no `..`, separators, drive letters, control or invisible format
+   characters such as the right-to-left override, or reserved Windows names),
+   shortened to fit the filesystem, and never overwrite an existing file. Partial files use a random
    local temp name and are deleted on failure or disconnect.
 6. **Clipboard** — never written to disk or logs. Sync is opt-in (off by
    default), text-only, capped at 10,000 characters, skips content that looks
@@ -38,7 +39,12 @@
    stored peer key, drops any live session and answers future connections
    from that identity with `DEVICE_UNPAIRED`; the phone then deletes its
    pairing and asks the user to pair again.
-8. **Logging** — diagnostic logs record connection/transfer *metadata*
+8. **Resource limits** — before authentication a peer can only make the
+   other side buffer 4 KiB (handshake) or 64 KiB (first encrypted message on
+   the PC); handshakes time out after 15 s. Failures inside one message
+   handler (a locked Windows clipboard, a disk error) are contained to that
+   message and never drop the connection.
+9. **Logging** — diagnostic logs record connection/transfer *metadata*
    (timestamps, byte counts, error codes) and never message payload contents.
 
 ## Known limits (MVP)

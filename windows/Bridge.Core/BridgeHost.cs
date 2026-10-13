@@ -141,6 +141,7 @@ public sealed class BridgeHost : IAsyncDisposable
             return false;
         }
 
+        channel.MarkPeerAuthenticated(); // file chunks etc. may now use full-size frames
         var device = new ConnectedDevice
         {
             DeviceId = paired.DeviceId,

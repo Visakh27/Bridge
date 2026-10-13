@@ -23,6 +23,12 @@ class TcpTransport(private val socket: Socket) {
     private val input = DataInputStream(socket.getInputStream())
     private val output = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
     private val writeLock = Mutex()
+
+    /**
+     * Largest incoming frame accepted. Kept tiny during the handshake so an
+     * unauthenticated server can't make the phone buffer megabytes.
+     */
+    @Volatile var maxFrameSize: Int = MAX_FRAME_SIZE
     @Volatile private var closed = false
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -40,7 +46,7 @@ class TcpTransport(private val socket: Socket) {
 
     suspend fun receiveFrame(): ByteArray = blockingIo {
         val len = input.readInt()
-        if (len !in 0..MAX_FRAME_SIZE) throw IOException("Refusing to read frame of size $len")
+        if (len !in 0..maxFrameSize) throw IOException("Refusing to read frame of size $len")
         val buffer = ByteArray(len)
         input.readFully(buffer)
         buffer

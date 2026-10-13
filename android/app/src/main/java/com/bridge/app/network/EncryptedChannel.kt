@@ -55,11 +55,14 @@ class EncryptedChannel private constructor(
         private const val MAX_ID_LENGTH = 256
         private const val MAX_KEY_LENGTH = 1024
         private const val MAX_SIGNATURE_LENGTH = 256
+        /** Handshake frames are ~100–200 bytes. */
+        const val HANDSHAKE_MAX_FRAME = 4 * 1024
 
         /** Android is always the initiator: it scans the QR and opens the TCP connection to the PC. */
         suspend fun handshakeAsInitiator(transport: TcpTransport, identity: IdentityKey, expectedPeerKey: ByteArray): EncryptedChannel {
             try {
                 val crypto = SessionCrypto()
+                transport.maxFrameSize = HANDSHAKE_MAX_FRAME
                 val myEphemeral = crypto.ephemeralPublicKey
                 transport.sendFrame(field(identity.deviceId.toByteArray(Charsets.UTF_8)) + field(myEphemeral))
 
@@ -76,6 +79,7 @@ class EncryptedChannel private constructor(
 
                 transport.sendFrame(field(identity.sign(transcript)))
                 crypto.completeHandshake(peerEphemeral, transcript, isInitiator = true)
+                transport.maxFrameSize = TcpTransport.MAX_FRAME_SIZE // the PC is authenticated now
                 return EncryptedChannel(transport, crypto, peerId)
             } catch (e: Throwable) {
                 transport.close()

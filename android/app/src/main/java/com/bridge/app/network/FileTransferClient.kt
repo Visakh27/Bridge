@@ -170,7 +170,12 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
                 if (chunk.index != state.nextIndex || state.bytesWritten + bytes.size > state.meta.size) {
                     return failIncoming(channel, state)
                 }
-                withContext(Dispatchers.IO) { state.stream.write(bytes) }
+                try {
+                    withContext(Dispatchers.IO) { state.stream.write(bytes) }
+                } catch (e: IOException) {
+                    // Storage full / removed: tell the PC now so it stops sending.
+                    return failIncoming(channel, state, FileAckStatus.CANCELLED)
+                }
                 state.nextIndex++
                 state.bytesWritten += bytes.size
                 report(TransferProgress(chunk.transferId, state.safeName, TransferDirection.RECEIVING,
@@ -179,19 +184,26 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
             MessageType.FILE_END -> {
                 val end = message.payloadAs<FileEndPayload>()
                 val state = incoming.remove(end.transferId) ?: return null
-                val actualHash = withContext(Dispatchers.IO) {
-                    state.stream.close()
-                    FileHasher.sha256HexOfFile(state.temp.path)
-                }
-                if (state.bytesWritten != state.meta.size || !actualHash.equals(state.meta.sha256, ignoreCase = true)) {
-                    state.temp.delete()
-                    channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(end.transferId, FileAckStatus.HASH_MISMATCH)))
-                    return report(finished(state, TransferStatus.FAILED))
-                }
-                val finalFile = withContext(Dispatchers.IO) {
-                    SafeFileName.uniqueFile(downloadDir, state.safeName).also { target ->
-                        if (!state.temp.renameTo(target)) throw IOException("Couldn't save ${state.safeName}")
+                val finalFile = try {
+                    val actualHash = withContext(Dispatchers.IO) {
+                        state.stream.close()
+                        FileHasher.sha256HexOfFile(state.temp.path)
                     }
+                    if (state.bytesWritten != state.meta.size || !actualHash.equals(state.meta.sha256, ignoreCase = true)) {
+                        state.temp.delete()
+                        channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(end.transferId, FileAckStatus.HASH_MISMATCH)))
+                        return report(finished(state, TransferStatus.FAILED))
+                    }
+                    withContext(Dispatchers.IO) {
+                        SafeFileName.uniqueFile(downloadDir, state.safeName).also { target ->
+                            if (!state.temp.renameTo(target)) throw IOException("Couldn't save ${state.safeName}")
+                        }
+                    }
+                } catch (e: IOException) {
+                    // Couldn't finish storing it: the PC must not believe it arrived.
+                    state.temp.delete()
+                    channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(end.transferId, FileAckStatus.CANCELLED)))
+                    return report(finished(state, TransferStatus.FAILED))
                 }
                 channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(end.transferId, FileAckStatus.OK)))
                 report(finished(state, TransferStatus.COMPLETED).copy(savedFile = finalFile))
@@ -202,7 +214,7 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
                     synchronized(o) { if (!o.finished) o.peerVerdict = FileAckStatus.CANCELLED }
                 }
                 val state = incoming.remove(cancel.transferId) ?: return null // …or something it was sending us
-                withContext(Dispatchers.IO) { state.stream.close(); state.temp.delete() }
+                withContext(Dispatchers.IO) { runCatching { state.stream.close() }; state.temp.delete() }
                 report(finished(state, TransferStatus.CANCELLED))
             }
             MessageType.FILE_ACK -> {
@@ -238,10 +250,10 @@ class FileTransferClient(private val onProgress: (TransferProgress) -> Unit) {
         }
     }
 
-    private suspend fun failIncoming(channel: EncryptedChannel, state: Incoming): TransferProgress {
+    private suspend fun failIncoming(channel: EncryptedChannel, state: Incoming, status: String = FileAckStatus.HASH_MISMATCH): TransferProgress {
         incoming.remove(state.meta.transferId)
         withContext(Dispatchers.IO) { runCatching { state.stream.close() }; state.temp.delete() }
-        channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(state.meta.transferId, FileAckStatus.HASH_MISMATCH)))
+        channel.send(BridgeMessage.create(MessageType.FILE_ACK, FileAckPayload(state.meta.transferId, status)))
         return report(finished(state, TransferStatus.FAILED))
     }
 

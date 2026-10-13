@@ -11,4 +11,10 @@ public interface ITransport : IAsyncDisposable
     Task SendFrameAsync(byte[] data, CancellationToken ct = default);
     Task<byte[]> ReceiveFrameAsync(CancellationToken ct = default);
     bool IsConnected { get; }
+
+    /// <summary>
+    /// Largest incoming frame accepted. Kept small until the peer is
+    /// authenticated so an anonymous client can't make us buffer megabytes.
+    /// </summary>
+    int MaxFrameSize { get; set; }
 }
