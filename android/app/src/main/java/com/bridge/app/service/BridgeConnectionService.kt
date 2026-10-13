@@ -25,7 +25,9 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Section 18 (Android background operation): keeps the encrypted session to
- * the paired PC alive as a foreground service and reconnects with backoff.
+ * the paired PC alive as a foreground service. [ReconnectLoop] reconnects with
+ * backoff, re-finds a PC whose address changed via local discovery, and
+ * reacts to network changes immediately.
  * The protocol work happens in the platform-agnostic [BridgeClientSession];
  * this class supplies Android pieces (battery, clipboard, notification,
  * persisted pairing) and exposes [state] for the UI.
@@ -43,6 +45,8 @@ class BridgeConnectionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectJob: Job? = null
     @Volatile private var session: BridgeClientSession? = null
+    @Volatile private var reconnectLoop: ReconnectLoop? = null
+    private lateinit var network: LocalNetworkMonitor
     private lateinit var store: SharedPrefsPairedDeviceStore
     private lateinit var fileTransfer: FileTransferClient
     private lateinit var clipboardSync: ClipboardSyncClient
@@ -51,7 +55,6 @@ class BridgeConnectionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val PREFS = "bridge_settings"
         private const val KEY_CLIPBOARD = "clipboard_sync"
-        private val backoffSteps = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
 
         @Volatile var instance: BridgeConnectionService? = null
             private set
@@ -85,6 +88,7 @@ class BridgeConnectionService : Service() {
         super.onCreate()
         instance = this
         store = SharedPrefsPairedDeviceStore(this)
+        network = LocalNetworkMonitor(this)
         fileTransfer = FileTransferClient(::onTransferProgress)
         clipboardSync = ClipboardSyncClient(AndroidClipboardAccess(this), scope).apply {
             enabled = isClipboardSyncEnabled(this@BridgeConnectionService)
@@ -105,54 +109,51 @@ class BridgeConnectionService : Service() {
     }
 
     private suspend fun connectLoop() {
-        var attempt = 0
-        while (currentCoroutineContext().isActive) {
-            val pc = store.current()
-            if (pc == null) {
-                _state.value = State(Status.DISCONNECTED)
-                stopSelf()
-                return
-            }
-            _state.update { it.copy(status = Status.CONNECTING, pcName = pc.deviceName) }
-            updateNotification(getString(R.string.connecting_service_text))
-
-            val identity = (application as BridgeApplication).identity
-            val s = BridgeClientSession(
-                identity, pc, fileTransfer, clipboardSync, downloadDir(),
-                listener = object : BridgeClientSession.Listener {
-                    override fun onConnected(peerFeatures: List<String>) {
-                        _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName) }
-                        updateNotification(getString(R.string.connected_service_text, pc.deviceName))
-                    }
-                    override fun onDisconnected() {
-                        _state.update { it.copy(status = Status.CONNECTING) }
-                    }
-                },
-                statusProvider = ::currentStatus,
-            )
-            session = s
-            val startedAt = System.currentTimeMillis()
-            try {
-                s.run()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: DeviceUnpairedException) {
-                // The PC forgot this phone: stop retrying and ask the user to pair again.
-                store.revoke(pc.deviceId)
-                _state.value = State(Status.UNPAIRED, pc.deviceName)
-                session = null
-                stopSelf()
-                return
-            } catch (e: Exception) {
-                // Unreachable, timed out, or the PC failed authentication: back off and retry.
-            } finally {
-                session = null
-            }
-
-            if (System.currentTimeMillis() - startedAt > 30_000) attempt = 0 // it was a real session
-            delay(backoffSteps[minOf(attempt, backoffSteps.size - 1)])
-            attempt++
+        val identity = (application as BridgeApplication).identity
+        val loop = ReconnectLoop(
+            store = store,
+            discovery = PcDiscovery(targets = network::broadcastTargets),
+            sessionFactory = { pc ->
+                BridgeClientSession(
+                    identity, pc, fileTransfer, clipboardSync, downloadDir(),
+                    listener = object : BridgeClientSession.Listener {
+                        override fun onConnected(peerFeatures: List<String>) {
+                            _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName) }
+                            updateNotification(getString(R.string.connected_service_text, pc.deviceName))
+                        }
+                        override fun onDisconnected() {
+                            _state.update { it.copy(status = Status.CONNECTING) }
+                            updateNotification(getString(R.string.connecting_service_text))
+                        }
+                    },
+                    statusProvider = ::currentStatus,
+                ).also { session = it }
+            },
+            listener = object : ReconnectLoop.Listener {
+                override fun onConnecting(pc: PairedDevice) {
+                    _state.update { it.copy(status = Status.CONNECTING, pcName = pc.deviceName) }
+                    updateNotification(getString(R.string.connecting_service_text))
+                }
+                override fun onAddressChanged(pc: PairedDevice) {
+                    // Found again via local discovery (new IP or port); already saved.
+                }
+                override fun onUnpaired(pc: PairedDevice) {
+                    // The PC forgot this phone: stop retrying and ask the user to pair again.
+                    _state.value = State(Status.UNPAIRED, pc.deviceName)
+                }
+            },
+        )
+        reconnectLoop = loop
+        network.start(onAvailable = loop::wake, onLost = loop::dropCurrentSession)
+        try {
+            val outcome = loop.run()
+            if (outcome == ReconnectLoop.Outcome.NOT_PAIRED) _state.value = State(Status.DISCONNECTED)
+        } finally {
+            network.stop()
+            reconnectLoop = null
+            session = null
         }
+        stopSelf()
     }
 
     private fun currentStatus(): DeviceStatusPayload {
@@ -208,6 +209,7 @@ class BridgeConnectionService : Service() {
 
     override fun onDestroy() {
         instance = null
+        network.stop()
         scope.cancel()
         session?.close()
         if (_state.value.status != Status.UNPAIRED) _state.update { it.copy(status = Status.DISCONNECTED) }

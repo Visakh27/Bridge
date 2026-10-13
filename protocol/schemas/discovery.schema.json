@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DiscoveryDatagram",
+  "description": "UDP 47821. Probe: phone -> broadcast. Reply: PC -> phone (unicast). Max 512 bytes.",
+  "oneOf": [
+    {
+      "title": "Probe",
+      "type": "object",
+      "required": [
+        "bridge",
+        "v",
+        "nonce",
+        "tag"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bridge": {
+          "const": "discover"
+        },
+        "v": {
+          "const": 1
+        },
+        "nonce": {
+          "type": "string",
+          "description": "base64, 16 random bytes"
+        },
+        "tag": {
+          "type": "string",
+          "description": "base64, first 16 bytes of SHA-256(f(label) f(pcKey) f(nonce))"
+        }
+      }
+    },
+    {
+      "title": "Reply",
+      "type": "object",
+      "required": [
+        "bridge",
+        "v",
+        "nonce",
+        "deviceId",
+        "port",
+        "sig"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bridge": {
+          "const": "here"
+        },
+        "v": {
+          "const": 1
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "deviceId": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "sig": {
+          "type": "string",
+          "description": "base64 DER ECDSA-P256-SHA256 by the PC identity key"
+        }
+      }
+    }
+  ]
+}

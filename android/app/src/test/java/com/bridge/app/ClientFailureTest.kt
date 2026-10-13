@@ -123,17 +123,17 @@ class ClientFailureTest {
         }.use { pc ->
             val device = PairedDevice(pc.identity.deviceId, "Test PC", pc.publicKeyBase64(), "127.0.0.1", pc.port)
             lateinit var session: BridgeClientSession
-            var sentOk = false
+            val sentOk = CompletableDeferred<Boolean>() // set on the callback's thread
             session = BridgeClientSession(SoftwareIdentity(), device, FileTransferClient {}, ClipboardSyncClient(NoClipboard, this),
                 Files.createTempDirectory("b").toFile(),
                 listener = object : BridgeClientSession.Listener {
                     override fun onConnected(peerFeatures: List<String>) {
-                        sentOk = runBlocking { session.send(BridgeMessage.create(MessageType.NOTIFICATION_POST, NotificationPostPayload("a", "b", "c", "k"))) }
+                        sentOk.complete(runBlocking { session.send(BridgeMessage.create(MessageType.NOTIFICATION_POST, NotificationPostPayload("a", "b", "c", "k"))) })
                     }
                 })
             val job = launch(Dispatchers.IO) { session.run() }
             assertEquals(MessageType.NOTIFICATION_POST, withTimeout(5_000) { got.await() })
-            assertTrue(sentOk)
+            assertTrue(withTimeout(5_000) { sentOk.await() })
             session.close()
             job.cancelAndJoin()
         }

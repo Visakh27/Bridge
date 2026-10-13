@@ -29,7 +29,9 @@ Bridge.Security ────────┤    platform)         ├────
   handles pairing and authenticates reconnecting phones, then hands each live
   connection to a `BridgeSession`; on Android, `network/BridgeClientSession`
   is the counterpart, wrapped by the `BridgeConnectionService` foreground
-  service for reconnect/backoff. Both run ping/pong keep-alives and drop a
+  service; its `ReconnectLoop` reconnects with backoff, reacts to network
+  changes, and uses `PcDiscovery` (UDP 47821, answered by Windows'
+  `DiscoveryResponder`) to re-find a PC whose address changed. Both run ping/pong keep-alives and drop a
   silent peer after 45 s.
 - **Platform integrations** — Bridge.Windows (tray, dashboard, drag-drop,
   Windows Clipboard/Notification APIs) and the Android `ui/`, `notifications/`,

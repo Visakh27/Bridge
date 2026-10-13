@@ -59,6 +59,14 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void Base64_Is_Not_Html_Escaped_On_The_Wire()
+    {
+        var json = BridgeMessage.Create(MessageType.FileChunk, new FileChunkPayload("t", 0, "ab+/cd==")).ToJson();
+        Assert.Contains("ab+/cd==", json);
+        Assert.DoesNotContain("\\u002B", json);
+    }
+
+    [Fact]
     public void Empty_Payload_Is_An_Object()
     {
         var json = BridgeMessage.CreateEmpty(MessageType.PresencePing).ToJson();

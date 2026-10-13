@@ -35,7 +35,8 @@ cd android
 ## Running the vertical slice locally
 
 1. Launch the Windows app — it shows a QR code. Allow it through Windows
-   Firewall on **private** networks when prompted (it listens on TCP 47820).
+   Firewall on **private** networks when prompted (it listens on TCP 47820
+   and, for discovery, UDP 47821).
 2. Launch the Android app on a phone on the **same Wi‑Fi network** as the PC
    and allow camera access.
 3. Scan the QR code. The phone pairs, then connects; the PC switches to the
@@ -76,7 +77,14 @@ cd android
   empty files both ways, a cancelled upload, nine concurrent uploads against
   the PC's limit of eight, and JSON-schema validation of real messages from
   both platforms).
-- Manual/integration still needed on real devices: camera QR scanning,
+- Discovery: `DiscoveryTests` (xUnit) and `DiscoveryTest` (JUnit) cover the
+  wire format, privacy (silent for other PCs' probes), forged/replayed
+  replies, rate limiting, floods, the reconnect loop's backoff/wake/retry
+  rules; cross-platform, the Windows host moves to a new port after pairing
+  and the Android reconnect loop finds it again over loopback and over real
+  UDP broadcast (including a new IP address).
+- Manual/integration still needed on real devices: discovery on real Wi-Fi
+  (some routers block broadcast between clients), camera QR scanning,
   reconnection after Wi‑Fi drop, large-file transfer, clipboard sync across a
   few Android OEMs, Windows notifications and tray behaviour.
 
