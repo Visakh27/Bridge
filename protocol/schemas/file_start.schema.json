@@ -28,6 +28,27 @@
       "type": "integer",
       "minimum": 0,
       "description": "0 for an empty file"
+    },
+    "resumable": {
+      "type": "boolean",
+      "description": "Sender waits for file.resume before sending chunks (peer advertised files.resume). Omitted when false."
+    },
+    "relativePath": {
+      "type": "string",
+      "description": "Folder transfers: the file's folder, '/'-separated, starting with the batch's top folder name; no file name. Untrusted."
+    },
+    "batchId": {
+      "type": "string",
+      "description": "Folder transfers: groups the files of one folder."
+    },
+    "batchIndex": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "batchCount": {
+      "type": "integer",
+      "minimum": 1
     }
-  }
+  },
+  "additionalProperties": false
 }

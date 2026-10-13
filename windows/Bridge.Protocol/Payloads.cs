@@ -6,7 +6,23 @@ public sealed record DeviceStatusPayload(int BatteryPercent, bool Charging, stri
 
 public sealed record ClipboardUpdatePayload(string Format, string Data);
 
-public sealed record FileStartPayload(string TransferId, string FileName, long Size, string Sha256, int TotalChunks);
+/// <summary>
+/// Announces a file. Optional fields (null = absent on the wire):
+/// <see cref="Resumable"/> — the sender waits for <c>file.resume</c> before sending chunks (peer advertised <c>files.resume</c>);
+/// <see cref="RelativePath"/> — folder path of this file inside a folder transfer, '/'-separated, without the file name;
+/// <see cref="BatchId"/>/<see cref="BatchIndex"/>/<see cref="BatchCount"/> — groups the files of one folder transfer.
+/// </summary>
+public sealed record FileStartPayload(string TransferId, string FileName, long Size, string Sha256, int TotalChunks)
+{
+    public bool? Resumable { get; init; }
+    public string? RelativePath { get; init; }
+    public string? BatchId { get; init; }
+    public int? BatchIndex { get; init; }
+    public int? BatchCount { get; init; }
+}
+
+/// <summary>Receiver → sender: continue from chunk <see cref="NextIndex"/> (0 = from the start).</summary>
+public sealed record FileResumePayload(string TransferId, int NextIndex);
 
 public sealed record FileChunkPayload(string TransferId, int Index, string Data);
 

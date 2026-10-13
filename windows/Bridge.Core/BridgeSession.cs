@@ -26,6 +26,7 @@ public sealed class BridgeSession : IAsyncDisposable
     private readonly TimeSpan _peerTimeout;
     private Task? _receiveLoop;
     private Task? _presenceLoop;
+    private Task? _resumeLoop;
     private int _ended;
 
     public ConnectedDevice Device { get; }
@@ -61,10 +62,26 @@ public sealed class BridgeSession : IAsyncDisposable
         _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
         _presenceLoop = Task.Run(() => PresenceLoopAsync(_cts.Token));
         StatusChanged?.Invoke(Device);
+
+        // Pick up where interrupted transfers left off (and tidy partials nobody came back for).
+        FileTransferService.CleanupExpiredPartials(_downloadDir);
+        _resumeLoop = Task.Run(async () =>
+        {
+            try { await _fileTransfer.ResumePendingAsync(_channel, SendOptions, _cts.Token); }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException) { }
+        });
     }
 
+    /// <summary>What the connected phone supports, for outgoing transfers.</summary>
+    public SendOptions SendOptions => new(Device.DeviceId,
+        Device.PeerFeatures.Contains(Features.FilesResume), Device.PeerFeatures.Contains(Features.FilesFolders));
+
     public Task<TransferProgress> SendFileAsync(string path, CancellationToken ct = default) =>
-        _fileTransfer.SendFileAsync(_channel, path, ct);
+        _fileTransfer.SendFileAsync(_channel, path, SendOptions, ct);
+
+    /// <summary>Sends a whole folder (structure kept when the phone supports folders).</summary>
+    public Task<IReadOnlyList<TransferProgress>> SendFolderAsync(string path, CancellationToken ct = default) =>
+        _fileTransfer.SendFolderAsync(_channel, path, SendOptions, ct);
 
     public Task SendAsync(BridgeMessage message, CancellationToken ct = default) => _channel.SendAsync(message, ct);
 
@@ -113,6 +130,7 @@ public sealed class BridgeSession : IAsyncDisposable
             case MessageType.FileEnd:
             case MessageType.FileCancel:
             case MessageType.FileAck:
+            case MessageType.FileResume:
                 await _fileTransfer.HandleIncomingAsync(_channel, message, _downloadDir, ct);
                 break;
             case MessageType.DeviceStatus:
@@ -174,7 +192,7 @@ public sealed class BridgeSession : IAsyncDisposable
         _cts.Cancel();
         Device.IsConnected = false;
         if (ReferenceEquals(_clipboard.Channel, _channel)) _clipboard.Channel = null;
-        _fileTransfer.AbortAll();
+        _fileTransfer.AbortAll(_channel);
         await _channel.DisposeAsync();
         StatusChanged?.Invoke(Device);
         Ended?.Invoke(this);
@@ -186,6 +204,7 @@ public sealed class BridgeSession : IAsyncDisposable
         await _channel.DisposeAsync(); // unblocks a pending receive
         if (_receiveLoop is not null) await SafeAwaitAsync(_receiveLoop);
         if (_presenceLoop is not null) await SafeAwaitAsync(_presenceLoop);
+        if (_resumeLoop is not null) await SafeAwaitAsync(_resumeLoop);
         await EndAsync();
     }
 

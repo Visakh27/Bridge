@@ -129,11 +129,12 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 |---|---|---|
 | `pairing.request` | A→W | `{"pairingToken","deviceName","publicKeyBase64"}` (phone identity key) |
 | `pairing.accept` / `pairing.reject` | W→A | `{"deviceName","publicKeyBase64"}` / `{"reason"}` |
-| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","photos"]}` |
+| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders"]}` |
 | `presence.ping` / `presence.pong` | both | `{}` — keep-alive; each side pings every 15 s and drops the connection after 45 s of silence |
 | `device.status` | A→W | `{"batteryPercent","charging","connectionQuality"}` |
 | `clipboard.update` | both | `{"format":"text","data":"..."}` (≤ 10,000 chars) |
-| `file.start` | both | `{"transferId","fileName","size","sha256","totalChunks"}` |
+| `file.start` | both | `{"transferId","fileName","size","sha256","totalChunks"}` + optional `resumable`, `relativePath`, `batchId`, `batchIndex`, `batchCount` (see Resume, Folders) |
+| `file.resume` | both | `{"transferId","nextIndex"}` — answer to a resumable `file.start` |
 | `file.chunk` | both | `{"transferId","index","data"}` (base64, indexes strictly in order from 0) |
 | `file.end` | both | `{"transferId"}` |
 | `file.ack` | both | `{"transferId","status":"ok"|"hash_mismatch"|"cancelled"}` |
@@ -168,3 +169,51 @@ Cancelling a transfer never abandons a frame half-written: an encrypted
 frame consumes a nonce, so senders only stop between frames, then send
 `file.cancel`. Out-of-order chunks, more bytes than `size`, or a SHA-256
 mismatch fail the transfer with `file.ack` `hash_mismatch`.
+
+Optional fields are omitted when unused (never sent as `null`).
+
+## Resume (`files.resume`)
+
+Used only when the receiver advertised `files.resume`.
+
+- The sender sets `"resumable": true` in `file.start` and waits up to 30 s for
+  the receiver's answer before sending any chunk:
+  - `file.resume {"transferId","nextIndex"}` — send chunks from `nextIndex`
+    (0 for a new file);
+  - `file.ack "ok"` — the receiver already stored this exact file (same
+    transfer id **and** SHA-256) on an earlier connection whose ack was lost:
+    nothing to send;
+  - `file.ack "cancelled"` — refused (busy, no space).
+- The receiver keeps a resumable partial file across disconnects for 24 h,
+  keyed by (sending device, transfer id), and reuses it only if `fileName`,
+  `size`, `sha256`, `totalChunks` and the folder fields are identical. Only
+  whole chunks count; a half-written last chunk is redone. Each peer can
+  leave at most 32 abandoned partials (oldest are evicted).
+- The sender keeps every resumable send in an outbox until it receives
+  `file.ack "ok"` after `file.end`. If the connection drops first the send is
+  *interrupted* (not "sent"); on the next connection the sender offers each
+  outbox entry again with the same transfer id. A source file that changed
+  (different size, timestamp or hash) simply starts from 0 on the receiver.
+- Explicit cancellation (`file.cancel`, user cancel) or a failed check
+  (`hash_mismatch`) deletes the partial and the outbox entry; only a lost
+  connection is resumable. The final SHA-256 check always covers the whole
+  file, including chunks received on earlier connections.
+
+## Folders (`files.folders`)
+
+Used only when the receiver advertised `files.folders`; otherwise the files
+of a folder are sent as loose files.
+
+- Each file of a folder is a normal transfer whose `file.start` carries
+  `relativePath` (its folder, '/'-separated, starting with the top folder's
+  name, e.g. `"Holiday/day 1"`), a shared `batchId`, and
+  `batchIndex`/`batchCount` for progress ("file 12 of 340"). Files are sent
+  one at a time; empty folders are not sent.
+- The receiver treats the path as untrusted: every segment is sanitised like
+  a file name, `.`/`..`/empty segments are dropped, more than 16 levels is
+  refused (`file.ack "cancelled"`), and the result must stay inside the
+  download folder. If a folder with the top name already exists, the whole
+  batch goes into `Name (1)` (remembered per batch, so a resumed folder
+  never splits).
+- At most 10,000 files per folder.
+

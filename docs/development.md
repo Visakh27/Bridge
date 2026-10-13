@@ -41,10 +41,11 @@ cd android
    and allow camera access.
 3. Scan the QR code. The phone pairs, then connects; the PC switches to the
    dashboard.
-4. Drag a file onto the Windows dashboard to send it to the phone (saved in
-   the app's `Android/data/com.bridge.app/files/Bridge` folder), or use
-   Android's share sheet → Bridge to send files to the PC (saved in
-   `Downloads\Bridge`).
+4. Drag files or folders onto the Windows dashboard to send them to the phone
+   (saved in the app's `Android/data/com.bridge.app/files/Bridge` folder), or
+   use Android's share sheet → Bridge (files) or "Send a folder" on the
+   dashboard to send to the PC (saved in `Downloads\Bridge`). Turn Wi-Fi off
+   and on mid-transfer: it pauses and continues where it stopped.
 5. Turn on "Sync clipboard" on both sides to test clipboard updates. On
    Android 10+, copies made on the phone are only sent while Bridge is open
    (a platform privacy rule); PC → phone works in the background.
@@ -83,7 +84,16 @@ cd android
   rules; cross-platform, the Windows host moves to a new port after pairing
   and the Android reconnect loop finds it again over loopback and over real
   UDP broadcast (including a new IP address).
-- Manual/integration still needed on real devices: discovery on real Wi-Fi
+- Resume and folders: `ResumeAndFolderTests`/`ResumeHardeningTests` (xUnit)
+  and `ResumeTest`/`ResumeHardeningTest` (JUnit) cover resuming after a cut
+  and after an app restart, lost acks (no duplicates), changed source files,
+  per-device partial isolation, cancel, expiry and caps, hostile folder
+  paths, interrupted folders resuming into the same folder, the state store's
+  write cost on 5,000-item queues, and crash-safe journals. Cross-platform
+  (`e2e-resume`): 30 MB files resumed both ways (one into a restarted phone
+  app), folders both ways with non-ASCII names, and an interrupted folder.
+- Manual/integration still needed on real devices: Android folder picker and
+  copying large folders to cache, resume over a real Wi-Fi drop, discovery on real Wi-Fi
   (some routers block broadcast between clients), camera QR scanning,
   reconnection after Wi‑Fi drop, large-file transfer, clipboard sync across a
   few Android OEMs, Windows notifications and tray behaviour.

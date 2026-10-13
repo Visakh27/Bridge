@@ -14,8 +14,8 @@ import kotlin.concurrent.thread
  * Windows code), for exercising the phone's failure paths on the JVM.
  * [script] runs on a background thread once a phone connects.
  */
-class TestPc(private val script: TestPc.Connection.() -> Unit) : AutoCloseable {
-    val identity = SoftwareIdentity("test-pc")
+class TestPc(val identity: SoftwareIdentity = SoftwareIdentity("test-pc"), private val script: TestPc.Connection.() -> Unit) : AutoCloseable {
+    constructor(script: TestPc.Connection.() -> Unit) : this(SoftwareIdentity("test-pc"), script)
     private val server = ServerSocket(0)
     val port: Int get() = server.localPort
     @Volatile var failure: Throwable? = null

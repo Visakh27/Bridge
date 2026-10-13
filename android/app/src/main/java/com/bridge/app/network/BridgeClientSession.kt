@@ -45,7 +45,7 @@ class BridgeClientSession(
     }
 
     companion object {
-        val LOCAL_FEATURES = listOf(Features.FILES, Features.CLIPBOARD, Features.NOTIFICATIONS)
+        val LOCAL_FEATURES = listOf(Features.FILES, Features.CLIPBOARD, Features.NOTIFICATIONS, Features.FILES_RESUME, Features.FILES_FOLDERS)
         private const val SETUP_TIMEOUT_MS = 20_000L
     }
 
@@ -96,23 +96,30 @@ class BridgeClientSession(
         clipboard.peerSupportsClipboard = Features.CLIPBOARD in peerFeatures
         clipboard.channel = ch
         lastSeen = System.currentTimeMillis()
+        this.peerFeatures = peerFeatures
         listener.onConnected(peerFeatures)
         try {
             coroutineScope {
                 val keepAlive = launch { keepAliveLoop(ch) }
                 val status = launch { statusLoop(ch) }
+                // Pick up where interrupted transfers left off (and tidy partials nobody came back for).
+                val resume = launch {
+                    runCatching { FileTransferClient.cleanupExpiredPartials(downloadDir) }
+                    try { fileTransfer.resumePending(ch, sendOptions()) } catch (e: IOException) { }
+                }
                 try {
                     receiveLoop(ch)
                 } finally {
                     keepAlive.cancel()
                     status.cancel()
+                    resume.cancel()
                 }
             }
         } finally {
             channel = null
             if (clipboard.channel === ch) clipboard.channel = null
             ch.close()
-            fileTransfer.abortAll()
+            fileTransfer.abortAll(ch)
             listener.onDisconnected()
         }
     }
@@ -147,7 +154,7 @@ class BridgeClientSession(
         when (message.type) {
             MessageType.CLIPBOARD_UPDATE -> clipboard.handleIncoming(message)
             MessageType.FILE_START, MessageType.FILE_CHUNK, MessageType.FILE_END,
-            MessageType.FILE_CANCEL, MessageType.FILE_ACK ->
+            MessageType.FILE_CANCEL, MessageType.FILE_ACK, MessageType.FILE_RESUME ->
                 fileTransfer.handleIncoming(ch, message, downloadDir)
             MessageType.PRESENCE_PING -> ch.send(BridgeMessage.createEmpty(MessageType.PRESENCE_PONG))
             MessageType.PRESENCE_PONG -> Unit // lastSeen already updated
@@ -191,10 +198,25 @@ class BridgeClientSession(
         return try { ch.send(message); true } catch (e: IOException) { false }
     }
 
-    /** Sends a file if connected; null when not connected. */
-    suspend fun sendFile(file: File, displayName: String = file.name): TransferProgress? {
+    @Volatile private var peerFeatures: List<String> = emptyList()
+
+    /** What the connected PC supports, for outgoing transfers. */
+    fun sendOptions() = SendOptions(pc.deviceId, Features.FILES_RESUME in peerFeatures, Features.FILES_FOLDERS in peerFeatures)
+
+    /**
+     * Sends a file if connected; null when not connected. With [deleteWhenDone]
+     * the file is a private copy removed once the send is finished (kept while
+     * an interrupted send waits to resume).
+     */
+    suspend fun sendFile(file: File, displayName: String = file.name, deleteWhenDone: Boolean = false): TransferProgress? {
         val ch = channel ?: return null
-        return fileTransfer.sendFile(ch, file, displayName)
+        return fileTransfer.sendFile(ch, file, displayName, sendOptions(), deleteWhenDone)
+    }
+
+    /** Sends a folder batch if connected; null when not connected. */
+    suspend fun sendFolder(items: List<FolderItem>): List<TransferProgress>? {
+        val ch = channel ?: return null
+        return fileTransfer.sendFolder(ch, items, sendOptions())
     }
 
     override fun close() { channel?.close() }
