@@ -37,7 +37,7 @@ class BridgeClientSession(
     private val peerTimeoutMs: Long = 45_000,
     private val statusIntervalMs: Long = 60_000,
     private val connect: suspend (host: String, port: Int) -> TcpTransport = TcpTransport::connect,
-) {
+) : SessionHandle {
     interface Listener {
         fun onConnected(peerFeatures: List<String>) {}
         fun onPeerError(error: ErrorPayload) {}
@@ -61,7 +61,7 @@ class BridgeClientSession(
      * @throws AuthenticationException whoever answered isn't the paired PC.
      * @throws IOException connection failures.
      */
-    suspend fun run() {
+    override suspend fun run() {
         var peerFeatures = emptyList<String>()
         val ch = try { withTimeout(SETUP_TIMEOUT_MS) {
             val transport = connect(pc.host, pc.port)
@@ -197,5 +197,5 @@ class BridgeClientSession(
         return fileTransfer.sendFile(ch, file, displayName)
     }
 
-    fun close() { channel?.close() }
+    override fun close() { channel?.close() }
 }

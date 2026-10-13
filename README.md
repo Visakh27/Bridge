@@ -24,7 +24,8 @@ privacy model.
 
 This is a genuine starting implementation, not a stub: the protocol,
 authenticated handshake, session encryption, pairing, reconnect, file
-transfer, clipboard sync, status and notification mirroring are implemented
+transfer, clipboard sync, status and notification mirroring, and local
+discovery of a paired PC whose address changed are implemented
 on both sides and interoperate (Windows uses .NET's ECDH/ECDSA/HKDF/AES-GCM,
 Android uses the JCE equivalents with matching curve/labels/framing — see
 `Bridge.Security.SessionCrypto` / `security/SessionCrypto.kt`). The
@@ -32,9 +33,6 @@ Windows ↔ Android wire compatibility has been exercised end to end by running
 the Windows `BridgeHost` against the Android client code over TCP. What's
 intentionally left as follow-up work, per the blueprint's own phased roadmap:
 
-- Local device **discovery** (Bluetooth/mDNS) — the phone reconnects to the
-  PC address and port (TCP 47820) from the QR code; if the PC's IP changes it
-  has to be re-paired until broadcast discovery (a Phase 1 item) exists.
 - A production **Room/SQLite**-backed `PairedDeviceStore` on Android (a
   SharedPreferences store is used now) and swapping Windows' JSON-file store
   for SQLite per section 5/14.

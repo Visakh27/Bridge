@@ -39,17 +39,23 @@
    stored peer key, drops any live session and answers future connections
    from that identity with `DEVICE_UNPAIRED`; the phone then deletes its
    pairing and asks the user to pair again.
-8. **Resource limits** — before authentication a peer can only make the
+8. **Discovery privacy** — PCs never announce themselves. A phone's probe
+   names its PC only through a tag derived from that PC's public key and a
+   fresh nonce, so other devices on the Wi-Fi can't identify or track Bridge
+   PCs. Replies are signed, so a forged reply can't point the phone at
+   another machine, and the PC limits how often it replies.
+9. **Resource limits** — before authentication a peer can only make the
    other side buffer 4 KiB (handshake) or 64 KiB (first encrypted message on
    the PC); handshakes time out after 15 s. Failures inside one message
    handler (a locked Windows clipboard, a disk error) are contained to that
    message and never drop the connection.
-9. **Logging** — diagnostic logs record connection/transfer *metadata*
+10. **Logging** — diagnostic logs record connection/transfer *metadata*
    (timestamps, byte counts, error codes) and never message payload contents.
 
 ## Known limits (MVP)
 
-- The PC's address comes from the QR code; if its IP changes the phone can't
-  find it until it is re-paired (LAN discovery is a Phase 1 item).
+- Discovery only works where the network passes UDP broadcast between
+  devices; networks with client isolation (some guest/hotel Wi-Fi) block it,
+  and the phone can then only reach the PC at its last known address.
 - Notification contents are sent to the PC in full once the user grants
   notification access; per-app filtering is follow-up work.

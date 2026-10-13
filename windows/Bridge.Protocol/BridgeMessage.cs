@@ -115,5 +115,9 @@ public static class BridgeJson
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+        // Wire JSON is never embedded in HTML, so don't escape '+', '<', etc.
+        // (the default turns every '+' in base64 into "\u002B", bloating
+        // frames, discovery datagrams and the pairing QR code).
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 }

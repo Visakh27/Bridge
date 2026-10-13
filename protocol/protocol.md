@@ -23,7 +23,8 @@ Receivers enforce a maximum that grows with trust: **4 KiB** for handshake
 frames, **64 KiB** on the PC until it has verified who the phone is, and
 **16 MiB** once both sides are authenticated. A larger length prefix closes
 the connection without reading the body. The PC listens on TCP **47820** (falling back to a free
-port if that one is taken); the port in use is in the pairing QR code.
+port if that one is taken); the port in use is in the pairing QR code and is
+reported by discovery (below).
 
 ## Keys
 
@@ -79,6 +80,43 @@ handshake → phone sends `capabilities.advertise` → PC verifies the phone is
 paired and its signature checks out, then replies `capabilities.advertise`
 (or `error` with `DEVICE_UNPAIRED` / `AUTH_FAILED` and closes) → either side
 may now send any message the peer advertised.
+
+## Discovery (UDP 47821)
+
+The QR code holds the PC's address at pairing time. If a paired phone later
+can't connect there (the PC's IP changed, or it fell back to another TCP
+port), it looks for that PC on the local network. Discovery is for finding a
+PC you have already paired with; pairing itself always uses the QR code.
+
+Datagrams are UTF-8 JSON (camelCase), at most 512 bytes
+(`protocol/schemas/discovery.schema.json`):
+
+| Datagram | Direction | Fields |
+|---|---|---|
+| probe | phone → subnet broadcast and 255.255.255.255, port 47821 | `{"bridge":"discover","v":1,"nonce","tag"}` |
+| reply | PC → the probe's source address/port (unicast) | `{"bridge":"here","v":1,"nonce","deviceId","port","sig"}` |
+
+- `nonce`: 16 random bytes (base64), fresh for every search.
+- `tag` = first 16 bytes of `SHA-256( f("bridge-discovery-tag-v1") ‖ f(pcIdentityKey) ‖ f(nonce) )`.
+  A PC answers **only** if the tag matches its own identity key, so PCs never
+  announce themselves, and an observer who doesn't know a PC's public key
+  can't tell which PC a probe is for or link two probes together.
+- `port`: the PC's current TCP port. `sig`: ECDSA-SHA256 (DER, base64) by the
+  PC identity key over `f("bridge-discovery-v1") ‖ f(nonce) ‖ f(deviceId) ‖ f(port as 4-byte BE)`.
+- The phone accepts a reply only if the nonce is its own, `deviceId` is the
+  paired PC's, and the signature verifies under the stored PC key. The PC's
+  address is taken from the reply's source IP. The phone saves the new
+  address and connects; the authenticated handshake still applies.
+- The phone resends the probe at 0, 0.3 and 0.8 s and waits up to 2.5 s. The
+  PC answers at most 20 probes per second and ignores anything malformed.
+
+When the phone retries: after a failed connection to the stored address
+(unreachable, timed out, or a machine that can't prove the PC's key), the
+phone runs discovery. If the PC answers from a different address or port, the
+phone retries there immediately, at most once per failure; otherwise the
+normal backoff (1, 2, 5, 10, 30 s) applies. A network change (Wi-Fi
+reconnects) ends the backoff early, and losing the network drops the dead
+connection at once.
 
 ## QR code
 

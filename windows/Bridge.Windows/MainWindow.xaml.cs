@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private readonly FileTransferService _fileTransfer = new();
     private readonly ClipboardSyncService _clipboard;
     private readonly TcpBridgeListener _listener;
+    private readonly DiscoveryResponder? _discovery;
     private readonly BridgeHost _host;
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherQueueTimer _qrTimer;
@@ -70,6 +71,18 @@ public sealed partial class MainWindow : Window
         _ = ShowQrCodeAsync();
         _ = ShowPairedStatusAsync(store);
         _ = _host.RunAsync(_listener, _cts.Token);
+
+        // Lets a paired phone find this PC again if its IP address or port changes.
+        try
+        {
+            _discovery = new DiscoveryResponder(identity, () => _listener.Port);
+            _ = _discovery.RunAsync(_cts.Token);
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            // UDP 47821 is in use: phones can still connect at the address from the QR code.
+            _discovery = null;
+        }
     }
 
     private async Task ShowQrCodeAsync()
@@ -253,6 +266,7 @@ public sealed partial class MainWindow : Window
     {
         _qrTimer.Stop();
         _cts.Cancel();
+        _discovery?.Dispose();
         await _host.DisposeAsync();
         _listener.Dispose();
     }

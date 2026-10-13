@@ -27,7 +27,7 @@ public sealed class DeviceIdentity
         using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var priv = ecdsa.ExportPkcs8PrivateKey();
         var pub = ecdsa.ExportSubjectPublicKeyInfo();
-        return new DeviceIdentity(deviceId ?? Guid.NewGuid().ToString(), priv, pub);
+        return new DeviceIdentity(string.IsNullOrEmpty(deviceId) ? Guid.NewGuid().ToString() : deviceId, priv, pub);
     }
 
     /// <summary>
