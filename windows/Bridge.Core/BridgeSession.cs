@@ -33,6 +33,8 @@ public sealed class BridgeSession : IAsyncDisposable
     public event Action<string>? NotificationDismissed; // notification key
     public event Action<ConnectedDevice>? StatusChanged;
     public event Action<ErrorPayload>? PeerError;
+    /// <summary>Diagnostics: a handler threw for a message of this type (payload contents are never included).</summary>
+    public event Action<string, Exception>? HandlerFailed;
     /// <summary>Raised once when the connection ends for any reason.</summary>
     public event Action<BridgeSession>? Ended;
 
@@ -78,9 +80,13 @@ public sealed class BridgeSession : IAsyncDisposable
                 {
                     await DispatchAsync(message, ct);
                 }
-                catch (Exception ex) when (ex is JsonException or InvalidDataException or FormatException or IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // One malformed message (or a local disk error) shouldn't drop the connection.
+                    // A bad message or a failing local handler (malformed payload, disk
+                    // error, the Windows clipboard being locked by another app…) must not
+                    // drop the connection. If the connection itself broke, the next
+                    // ReceiveAsync fails and ends the session.
+                    HandlerFailed?.Invoke(message.Type, ex);
                 }
             }
         }

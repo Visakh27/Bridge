@@ -24,6 +24,15 @@ public sealed class EncryptedChannel : IAsyncDisposable
     private const int MaxKeyLength = 1024;
     private const int MaxSignatureLength = 256;
 
+    /// <summary>Handshake frames are ~100–200 bytes; nothing larger is read before keys exist.</summary>
+    public const int HandshakeMaxFrame = 4 * 1024;
+
+    /// <summary>
+    /// Cap for an encrypted-but-unauthenticated responder channel (the PC before it
+    /// has checked who the phone is). pairing.request / capabilities.advertise fit easily.
+    /// </summary>
+    public const int UnauthenticatedMaxFrame = 64 * 1024;
+
     private readonly ITransport _transport;
     private readonly SessionCrypto _crypto;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -54,6 +63,7 @@ public sealed class EncryptedChannel : IAsyncDisposable
         var crypto = new SessionCrypto();
         try
         {
+            transport.MaxFrameSize = HandshakeMaxFrame;
             var myEphemeral = crypto.EphemeralPublicKey;
             await transport.SendFrameAsync(Concat(Field(Encoding.UTF8.GetBytes(identity.DeviceId)), Field(myEphemeral)), ct);
 
@@ -69,6 +79,7 @@ public sealed class EncryptedChannel : IAsyncDisposable
 
             await transport.SendFrameAsync(Field(identity.Sign(transcript)), ct);
             crypto.CompleteHandshake(peerEphemeral, transcript, isInitiator: true);
+            transport.MaxFrameSize = TcpTransport.MaxSessionFrameSize; // responder is authenticated
             return new EncryptedChannel(transport, crypto, peerId, transcript, null);
         }
         catch
@@ -88,6 +99,7 @@ public sealed class EncryptedChannel : IAsyncDisposable
         var crypto = new SessionCrypto();
         try
         {
+            transport.MaxFrameSize = HandshakeMaxFrame;
             var hello = new FrameReader(await transport.ReceiveFrameAsync(ct));
             var peerId = Encoding.UTF8.GetString(hello.Next(MaxIdLength));
             var peerEphemeral = hello.Next(MaxKeyLength);
@@ -104,6 +116,7 @@ public sealed class EncryptedChannel : IAsyncDisposable
             auth.End();
 
             crypto.CompleteHandshake(peerEphemeral, transcript, isInitiator: false);
+            transport.MaxFrameSize = UnauthenticatedMaxFrame; // raised by MarkPeerAuthenticated
             return new EncryptedChannel(transport, crypto, peerId, transcript, peerSig);
         }
         catch
@@ -117,15 +130,32 @@ public sealed class EncryptedChannel : IAsyncDisposable
     public bool VerifyPeer(byte[] peerPublicKey) =>
         _peerSignature is not null && DeviceIdentity.Verify(peerPublicKey, _transcript, _peerSignature);
 
+    /// <summary>Lifts the pre-authentication frame cap once the caller has verified the peer.</summary>
+    public void MarkPeerAuthenticated() => _transport.MaxFrameSize = TcpTransport.MaxSessionFrameSize;
+
+    /// <summary>
+    /// Sends one message. <paramref name="ct"/> can only cancel while waiting for
+    /// the send lock: once a frame is encrypted it consumes a nonce, so it is always
+    /// written in full — abandoning it half-way would desynchronise the stream and
+    /// the peer would drop the whole connection.
+    /// </summary>
+    /// <exception cref="IOException">The connection is closed or broken.</exception>
+    /// <exception cref="OperationCanceledException">Cancelled before anything was sent.</exception>
     public async Task SendAsync(BridgeMessage message, CancellationToken ct = default)
     {
         var plaintext = Encoding.UTF8.GetBytes(message.ToJson());
         await _sendLock.WaitAsync(ct);
         try
         {
+            if (Volatile.Read(ref _disposed) != 0) throw new IOException("Connection closed");
             // Encrypt inside the lock: nonces are sequence numbers, so frames
             // must reach the wire in the order they were encrypted.
-            await _transport.SendFrameAsync(_crypto.Encrypt(plaintext), ct);
+            var frame = _crypto.Encrypt(plaintext);
+            await _transport.SendFrameAsync(frame, CancellationToken.None);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new IOException("Connection closed", ex);
         }
         finally
         {
@@ -133,10 +163,19 @@ public sealed class EncryptedChannel : IAsyncDisposable
         }
     }
 
-    /// <summary>Single reader only. Throws on transport, integrity or JSON errors.</summary>
+    /// <summary>Single reader only. Throws on transport (IOException), integrity or JSON errors.</summary>
     public async Task<BridgeMessage> ReceiveAsync(CancellationToken ct = default)
     {
-        var frame = await _transport.ReceiveFrameAsync(ct);
+        byte[] frame;
+        try
+        {
+            frame = await _transport.ReceiveFrameAsync(ct);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new IOException("Connection closed", ex);
+        }
+        if (Volatile.Read(ref _disposed) != 0) throw new IOException("Connection closed");
         var plaintext = _crypto.Decrypt(frame);
         return BridgeMessage.FromJson(Encoding.UTF8.GetString(plaintext));
     }
@@ -146,8 +185,13 @@ public sealed class EncryptedChannel : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        await _transport.DisposeAsync();
-        _crypto.Dispose();
+        await _transport.DisposeAsync(); // unblocks any in-flight write
+        // Don't free the keys under a sender that is mid-Encrypt.
+        if (await _sendLock.WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+            _crypto.Dispose();
+            _sendLock.Release();
+        }
     }
 
     private static byte[] Field(byte[] value)

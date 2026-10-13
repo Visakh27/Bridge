@@ -44,12 +44,27 @@ public sealed class WindowsClipboardAccess : IClipboardAccess
         return view.Contains(StandardDataFormats.Text) ? await view.GetTextAsync() : null;
     });
 
-    public Task WriteTextAsync(string text) => OnUiThreadAsync<object?>(() =>
+    /// <summary>
+    /// Another app holding the clipboard open makes SetContent throw
+    /// (CLIPBRD_E_CANT_OPEN), usually for a few milliseconds, so retry briefly.
+    /// </summary>
+    public Task WriteTextAsync(string text) => OnUiThreadAsync<object?>(async () =>
     {
         var package = new DataPackage();
         package.SetText(text);
-        Clipboard.SetContent(package);
-        return Task.FromResult<object?>(null);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Clipboard.SetContent(package);
+                Clipboard.Flush(); // keep the text available after Bridge exits
+                return null;
+            }
+            catch (System.Runtime.InteropServices.COMException) when (attempt < 5)
+            {
+                await Task.Delay(50 * attempt);
+            }
+        }
     });
 
     private Task<T> OnUiThreadAsync<T>(Func<Task<T>> action)

@@ -7,6 +7,7 @@ import java.io.IOException
 import java.security.GeneralSecurityException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -123,11 +124,14 @@ class BridgeClientSession(
                 lastSeen = System.currentTimeMillis()
                 try {
                     dispatch(ch, message)
-                } catch (e: MalformedMessageException) {
-                    // One bad message shouldn't drop the connection.
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: IOException) {
-                    // e.g. local storage error while saving a file; keep the session.
-                    if (!ch.isConnected) throw e
+                    if (!ch.isConnected) throw e // the connection itself broke
+                } catch (e: Exception) {
+                    // A bad message or a failing local handler (malformed payload,
+                    // clipboard service error, storage problem…) must not drop the
+                    // connection; if the connection broke, the next receive fails.
                 }
             }
         } catch (e: IOException) {

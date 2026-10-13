@@ -109,7 +109,7 @@ public sealed class FileTransferService
         {
             status = TransferStatus.Cancelled;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
         {
             status = TransferStatus.Failed;
         }
@@ -201,7 +201,15 @@ public sealed class FileTransferService
                 if (chunk.Index != state.NextIndex || state.BytesWritten + bytes.Length > state.Meta.Size)
                     return await FailIncomingAsync(channel, state, FileAckStatus.HashMismatch, ct);
 
-                await state.Stream.WriteAsync(bytes, ct);
+                try
+                {
+                    await state.Stream.WriteAsync(bytes, ct);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Disk full / drive removed: tell the sender now so it stops.
+                    return await FailIncomingAsync(channel, state, FileAckStatus.Cancelled, ct);
+                }
                 state.NextIndex++;
                 state.BytesWritten += bytes.Length;
                 return Report(new TransferProgress
@@ -216,20 +224,31 @@ public sealed class FileTransferService
                 var end = message.PayloadAs<FileEndPayload>();
                 if (!_incoming.TryGetValue(end.TransferId, out var state)) return null;
                 _incoming.Remove(end.TransferId);
-                await state.Stream.DisposeAsync();
-
-                var actualHash = await FileHasher.Sha256HexAsync(state.TempPath, ct);
-                if (state.BytesWritten != state.Meta.Size ||
-                    !string.Equals(actualHash, state.Meta.Sha256, StringComparison.OrdinalIgnoreCase))
+                string actualHash;
+                string finalPath;
+                try
                 {
+                    await state.Stream.DisposeAsync(); // flushes: can itself fail when the disk is full
+                    actualHash = await FileHasher.Sha256HexAsync(state.TempPath, ct);
+                    if (state.BytesWritten != state.Meta.Size ||
+                        !string.Equals(actualHash, state.Meta.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        TryDelete(state.TempPath);
+                        await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
+                            new FileAckPayload(end.TransferId, FileAckStatus.HashMismatch)), ct);
+                        return Report(Finished(state, TransferStatus.Failed));
+                    }
+                    finalPath = SafeFileName.UniquePath(downloadDir, state.SafeName);
+                    File.Move(state.TempPath, finalPath, overwrite: false);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Couldn't finish storing it: the sender must not believe it arrived.
                     TryDelete(state.TempPath);
                     await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
-                        new FileAckPayload(end.TransferId, FileAckStatus.HashMismatch)), ct);
+                        new FileAckPayload(end.TransferId, FileAckStatus.Cancelled)), ct);
                     return Report(Finished(state, TransferStatus.Failed));
                 }
-
-                var finalPath = SafeFileName.UniquePath(downloadDir, state.SafeName);
-                File.Move(state.TempPath, finalPath, overwrite: false);
                 await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck,
                     new FileAckPayload(end.TransferId, FileAckStatus.Ok)), ct);
 
@@ -291,7 +310,7 @@ public sealed class FileTransferService
     {
         foreach (var state in _incoming.Values)
         {
-            state.Stream.Dispose();
+            try { state.Stream.Dispose(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             TryDelete(state.TempPath);
             Report(Finished(state, TransferStatus.Failed));
         }
@@ -310,7 +329,7 @@ public sealed class FileTransferService
     private async Task<TransferProgress> FailIncomingAsync(EncryptedChannel channel, Incoming state, string status, CancellationToken ct)
     {
         _incoming.Remove(state.Meta.TransferId);
-        await state.Stream.DisposeAsync();
+        try { await state.Stream.DisposeAsync(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         TryDelete(state.TempPath);
         await channel.SendAsync(BridgeMessage.Create(MessageType.FileAck, new FileAckPayload(state.Meta.TransferId, status)), ct);
         return Report(Finished(state, TransferStatus.Failed));
