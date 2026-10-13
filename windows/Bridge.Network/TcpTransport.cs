@@ -13,16 +13,27 @@ public sealed class TcpTransport : ITransport
     private readonly NetworkStream _stream;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
+    public const int MaxFrameSize = 16 * 1024 * 1024;
+
     public TcpTransport(TcpClient client)
     {
         _client = client;
+        _client.NoDelay = true;
         _stream = client.GetStream();
     }
 
     public static async Task<TcpTransport> ConnectAsync(string host, int port, CancellationToken ct = default)
     {
         var client = new TcpClient();
-        await client.ConnectAsync(host, port, ct);
+        try
+        {
+            await client.ConnectAsync(host, port, ct);
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
         return new TcpTransport(client);
     }
 
@@ -50,7 +61,7 @@ public sealed class TcpTransport : ITransport
         var lenBuf = await ReadExactAsync(4, ct);
         if (BitConverter.IsLittleEndian) Array.Reverse(lenBuf);
         var len = BitConverter.ToInt32(lenBuf, 0);
-        if (len is < 0 or > 64 * 1024 * 1024)
+        if (len is < 0 or > MaxFrameSize)
             throw new InvalidDataException($"Refusing to read frame of size {len}");
         return await ReadExactAsync(len, ct);
     }
@@ -78,14 +89,35 @@ public sealed class TcpTransport : ITransport
 /// <summary>Listens for incoming pairing/reconnect TCP connections on the local network.</summary>
 public sealed class TcpBridgeListener : IDisposable
 {
+    /// <summary>
+    /// Stable default port. Paired phones reconnect to the host/port they saw in
+    /// the QR code, so a port that changed on every launch would strand them.
+    /// </summary>
+    public const int DefaultPort = 47820;
+
     private readonly TcpListener _listener;
     public int Port { get; }
 
-    public TcpBridgeListener(int port = 0)
+    /// <param name="port">Port to bind; 0 picks any free port.</param>
+    /// <param name="fallbackToEphemeral">If the requested port is taken, bind a free port instead of failing.</param>
+    public TcpBridgeListener(int port = DefaultPort, bool fallbackToEphemeral = true)
     {
-        _listener = new TcpListener(System.Net.IPAddress.Any, port);
-        _listener.Start();
+        try
+        {
+            _listener = Start(port);
+        }
+        catch (SocketException) when (fallbackToEphemeral && port != 0)
+        {
+            _listener = Start(0);
+        }
         Port = ((System.Net.IPEndPoint)_listener.LocalEndpoint).Port;
+    }
+
+    private static TcpListener Start(int port)
+    {
+        var listener = new TcpListener(System.Net.IPAddress.Any, port);
+        listener.Start();
+        return listener;
     }
 
     public async Task<TcpTransport> AcceptAsync(CancellationToken ct = default)

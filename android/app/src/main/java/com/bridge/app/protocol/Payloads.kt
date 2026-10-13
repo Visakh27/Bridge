@@ -14,7 +14,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class FileEndPayload(val transferId: String)
 
-@Serializable data class FileAckPayload(val transferId: String, val status: String) // ok | hash_mismatch | cancelled
+@Serializable data class FileAckPayload(val transferId: String, val status: String) // see FileAckStatus
 
 @Serializable data class FileCancelPayload(val transferId: String)
 
@@ -30,4 +30,37 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class PairingRejectPayload(val reason: String)
 
-@Serializable data class PairingQrPayload(val pairingToken: String, val host: String, val port: Int, val deviceId: String, val deviceName: String)
+/**
+ * Contents of the QR code the PC shows. [publicKeyBase64] is the PC's
+ * long-term identity key (SubjectPublicKeyInfo): the phone checks the PC's
+ * handshake signature against it before sending the pairing token.
+ */
+@Serializable data class PairingQrPayload(
+    val pairingToken: String,
+    val host: String,
+    val port: Int,
+    val deviceId: String,
+    val deviceName: String,
+    val publicKeyBase64: String,
+)
+
+object FileAckStatus {
+    const val OK = "ok"
+    const val HASH_MISMATCH = "hash_mismatch"
+    const val CANCELLED = "cancelled"
+}
+
+object Features {
+    const val FILES = "files"
+    const val CLIPBOARD = "clipboard"
+    const val NOTIFICATIONS = "notifications"
+    const val PHOTOS = "photos"
+}
+
+object ErrorCodes {
+    const val CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
+    const val AUTH_FAILED = "AUTH_FAILED"
+    const val DEVICE_UNPAIRED = "DEVICE_UNPAIRED"
+    const val TRANSFER_INTERRUPTED = "TRANSFER_INTERRUPTED"
+    const val PERMISSION_DENIED = "PERMISSION_DENIED"
+}

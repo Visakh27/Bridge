@@ -10,6 +10,10 @@ class BridgeApplication : Application() {
     lateinit var identity: DeviceIdentity
         private set
 
+    companion object {
+        const val CONNECTION_CHANNEL_ID = "bridge_connection"
+    }
+
     override fun onCreate() {
         super.onCreate()
         identity = DeviceIdentity.loadOrCreate(this)
@@ -20,7 +24,7 @@ class BridgeApplication : Application() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel("bridge_connection", "Bridge connection", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CONNECTION_CHANNEL_ID, "Bridge connection", NotificationManager.IMPORTANCE_LOW)
         )
     }
 }

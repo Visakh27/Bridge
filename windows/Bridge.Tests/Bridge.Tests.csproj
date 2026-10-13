@@ -14,5 +14,6 @@
     <ProjectReference Include="..\Bridge.Protocol\Bridge.Protocol.csproj" />
     <ProjectReference Include="..\Bridge.Security\Bridge.Security.csproj" />
     <ProjectReference Include="..\Bridge.Network\Bridge.Network.csproj" />
+    <ProjectReference Include="..\Bridge.Core\Bridge.Core.csproj" />
   </ItemGroup>
 </Project>

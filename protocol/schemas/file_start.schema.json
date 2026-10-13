@@ -2,12 +2,32 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "FileStartPayload",
   "type": "object",
-  "required": ["transferId", "fileName", "size", "sha256", "totalChunks"],
+  "required": [
+    "transferId",
+    "fileName",
+    "size",
+    "sha256",
+    "totalChunks"
+  ],
   "properties": {
-    "transferId": { "type": "string" },
-    "fileName": { "type": "string" },
-    "size": { "type": "integer", "minimum": 0 },
-    "sha256": { "type": "string" },
-    "totalChunks": { "type": "integer", "minimum": 1 }
+    "transferId": {
+      "type": "string"
+    },
+    "fileName": {
+      "type": "string",
+      "description": "Untrusted: receivers keep only the last path segment"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string"
+    },
+    "totalChunks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0 for an empty file"
+    }
   }
 }

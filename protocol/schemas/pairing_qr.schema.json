@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PairingQrPayload",
+  "type": "object",
+  "required": [
+    "pairingToken",
+    "host",
+    "port",
+    "deviceId",
+    "deviceName",
+    "publicKeyBase64"
+  ],
+  "properties": {
+    "pairingToken": {
+      "type": "string"
+    },
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "deviceId": {
+      "type": "string"
+    },
+    "deviceName": {
+      "type": "string"
+    },
+    "publicKeyBase64": {
+      "type": "string",
+      "description": "PC identity key, base64 SubjectPublicKeyInfo (P-256)"
+    }
+  }
+}

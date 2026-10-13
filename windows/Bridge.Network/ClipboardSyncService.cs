@@ -17,11 +17,13 @@ public interface IClipboardAccess
 
 public sealed class ClipboardSyncService
 {
-    private readonly IClipboardAccess _clipboard;
-    private bool _enabled;
-    private bool _suppressNextLocalEvent;
+    public const int MaxTextLength = 10_000;
 
-    public bool TextOnly { get; set; } = true;
+    private readonly IClipboardAccess _clipboard;
+    private readonly object _gate = new();
+    private string? _lastSynced; // last text sent or received, to break echo loops
+    private volatile bool _enabled;
+    private volatile EncryptedChannel? _channel;
 
     public ClipboardSyncService(IClipboardAccess clipboard)
     {
@@ -29,22 +31,49 @@ public sealed class ClipboardSyncService
         _clipboard.LocalClipboardChanged += OnLocalClipboardChanged;
     }
 
+    /// <summary>Opt-in (docs/security.md); off by default.</summary>
     public bool Enabled
     {
         get => _enabled;
         set => _enabled = value;
     }
 
-    public EncryptedChannel? Channel { get; set; }
+    /// <summary>Whether the peer advertised the "clipboard" feature.</summary>
+    public bool PeerSupportsClipboard { get; set; }
+
+    public EncryptedChannel? Channel
+    {
+        get => _channel;
+        set => _channel = value;
+    }
+
+    /// <summary>Raised when an outgoing update couldn't be sent (never throws into the clipboard event).</summary>
+    public event Action<Exception>? SendFailed;
 
     private async void OnLocalClipboardChanged(string newText)
     {
-        if (!_enabled || Channel is null) return;
-        if (_suppressNextLocalEvent) { _suppressNextLocalEvent = false; return; }
-        if (ContainsLikelySensitiveContent(newText)) return;
+        // async void is an event handler: every exception must be caught here
+        // or it would crash the process.
+        try
+        {
+            var channel = _channel;
+            if (!_enabled || !PeerSupportsClipboard || channel is null) return;
+            if (ContainsLikelySensitiveContent(newText)) return;
+            lock (_gate)
+            {
+                if (newText == _lastSynced) return; // our own write echoing back, or no change
+                _lastSynced = newText;
+            }
 
-        await Channel.SendAsync(BridgeMessage.Create(MessageType.ClipboardUpdate,
-            new ClipboardUpdatePayload("text", newText)));
+            await channel.SendAsync(BridgeMessage.Create(MessageType.ClipboardUpdate,
+                new ClipboardUpdatePayload("text", newText)));
+        }
+        catch (Exception ex)
+        {
+            // Not delivered: forget it so copying the same text again retries.
+            lock (_gate) { if (_lastSynced == newText) _lastSynced = null; }
+            SendFailed?.Invoke(ex);
+        }
     }
 
     /// <summary>Call for every incoming BridgeMessage of type clipboard.update.</summary>
@@ -52,16 +81,20 @@ public sealed class ClipboardSyncService
     {
         if (!_enabled) return;
         var payload = message.PayloadAs<ClipboardUpdatePayload>();
-        if (payload.Format != "text") return;
+        if (payload.Format != "text" || payload.Data is null || payload.Data.Length > MaxTextLength) return;
 
-        _suppressNextLocalEvent = true;
+        lock (_gate)
+        {
+            if (payload.Data == _lastSynced) return;
+            _lastSynced = payload.Data; // so the resulting local change event isn't echoed back
+        }
         await _clipboard.WriteTextAsync(payload.Data);
     }
 
     /// <summary>Basic heuristic exclusions (section 10): avoid syncing things that look like secrets.</summary>
-    private static bool ContainsLikelySensitiveContent(string text)
+    public static bool ContainsLikelySensitiveContent(string text)
     {
-        if (text.Length > 10_000) return true; // avoid huge blobs
+        if (text.Length > MaxTextLength) return true; // avoid huge blobs
         var lowered = text.ToLowerInvariant();
         return lowered.Contains("-----begin") // private keys / certs
             || lowered.Contains("password:")
