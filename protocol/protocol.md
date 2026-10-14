@@ -129,7 +129,7 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 |---|---|---|
 | `pairing.request` | A→W | `{"pairingToken","deviceName","publicKeyBase64"}` (phone identity key) |
 | `pairing.accept` / `pairing.reject` | W→A | `{"deviceName","publicKeyBase64"}` / `{"reason"}` |
-| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders"]}` |
+| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions"]}` |
 | `presence.ping` / `presence.pong` | both | `{}` — keep-alive; each side pings every 15 s and drops the connection after 45 s of silence |
 | `device.status` | A→W | `{"batteryPercent","charging","connectionQuality"}` |
 | `clipboard.update` | both | `{"format":"text","data":"..."}` (≤ 10,000 chars) |
@@ -139,8 +139,11 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 | `file.end` | both | `{"transferId"}` |
 | `file.ack` | both | `{"transferId","status":"ok"|"hash_mismatch"|"cancelled"}` |
 | `file.cancel` | both | `{"transferId"}` — either side, for a transfer in either direction |
-| `notification.post` | A→W | `{"appName","title","text","key"}` |
-| `notification.dismiss` | A→W | `{"key"}` |
+| `notification.post` | A→W | `{"appName","title","text","key"}` + optional `appId`, `actions`, `canDismiss` (see Notification actions) |
+| `notification.dismiss` | both | `{"key"}` — A→W: it's gone from the phone; W→A: clear it on the phone |
+| `notification.action` | W→A | `{"requestId","key","actionId"}` + `replyText` for reply buttons |
+| `notification.action.result` | A→W | `{"requestId","status":"ok"|"gone"|"refused"|"invalid"|"failed"}` |
+| `notification.mute` | W→A | `{"appId"}` — stop mirroring that app |
 | `error` | both | `{"code","message"}` — see docs/architecture.md error codes |
 
 ## Versioning
@@ -217,3 +220,36 @@ of a folder are sent as loose files.
   never splits).
 - At most 10,000 files per folder.
 
+
+## Notification actions (`notifications.actions`)
+
+Used only when the other side advertised `notifications.actions`: the phone
+then adds the optional fields to `notification.post`, and the PC may send the
+W→A notification messages. Schemas: `notification_post`, `notification_action`,
+`notification_action_result`, `notification_mute` in `protocol/schemas`.
+
+- `notification.post` extras: `appId` (the Android package name),
+  `actions` — up to 3 of the notification's own buttons,
+  `[{"id","title","reply":true?}]` (`reply` marks a button that takes typed
+  text) — and `canDismiss` (the user can clear it on the phone). Buttons that
+  would open an app on the phone, system-suggested smart actions and
+  choice-only inputs are not offered. An update that changes nothing the PC
+  shows is not sent again.
+- Button ids are `"<index>-<8 hex>"` (the hex is from the button's title and
+  kind). If the app changes the notification's buttons, an old id matches
+  nothing and the phone answers `gone`; it never presses a different button.
+- `notification.action`: the phone answers `notification.action.result` with
+  the same `requestId`:
+  `ok` — done; `gone` — the notification or that button no longer exists;
+  `refused` — Bridge doesn't mirror it (the app is turned off, or it is an
+  ongoing/secret notification); `invalid` — `replyText` missing, blank or over
+  2,000 characters on a reply button, or present on a plain button;
+  `failed` — the app didn't accept it. The PC gives up after 15 s.
+- `notification.dismiss` (W→A) clears the notification on the phone if it is
+  mirrored and clearable; the phone then sends its usual `notification.dismiss`
+  (A→W). If it's already gone, the phone answers with `notification.dismiss` straight away.
+- `notification.mute` turns the app off in the phone's per-app list; the phone
+  sends `notification.dismiss` for each of that app's notifications the PC is
+  showing. Only the phone can turn an app back on.
+- The phone acts only on notifications that are showing now *and* that it
+  would mirror; every request is checked again against the live notification.

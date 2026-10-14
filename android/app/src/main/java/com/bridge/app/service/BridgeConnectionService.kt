@@ -15,9 +15,13 @@ import androidx.core.content.ContextCompat
 import com.bridge.app.R
 import com.bridge.app.core.BridgeApplication
 import com.bridge.app.network.*
+import com.bridge.app.notifications.NotificationMirror
+import com.bridge.app.notifications.PhoneNotification
 import com.bridge.app.protocol.*
 import java.io.File
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,6 +54,8 @@ class BridgeConnectionService : Service() {
     private lateinit var store: SharedPrefsPairedDeviceStore
     private lateinit var fileTransfer: FileTransferClient
     private lateinit var clipboardSync: ClipboardSyncClient
+    /** Notification posts/dismissals go out one at a time, in order (a dismiss never overtakes its post). */
+    private val notificationQueue = Channel<Pair<BridgeClientSession, BridgeMessage>>(256, BufferOverflow.DROP_OLDEST)
 
     companion object {
         private const val NOTIFICATION_ID = 1
@@ -75,6 +81,33 @@ class BridgeConnectionService : Service() {
             instance?.clipboardSync?.enabled = enabled
         }
 
+        /** A notification was posted or updated on the phone (from BridgeNotificationListener). */
+        fun onPhoneNotificationPosted(mirror: NotificationMirror, n: PhoneNotification) {
+            val service = instance
+            val s = service?.session
+            if (s == null || !s.peerSupports(Features.NOTIFICATIONS)) {
+                mirror.filter.noteSeen(n.appId, n.appName) // still listed in the per-app settings
+                return
+            }
+            val message = mirror.update(n, s.peerSupports(Features.NOTIFICATIONS_ACTIONS)) ?: return
+            service.queueNotificationMessage(s, message)
+        }
+
+        fun onPhoneNotificationRemoved(mirror: NotificationMirror, n: PhoneNotification) {
+            val payload = mirror.onRemoved(n) ?: return
+            val service = instance ?: return
+            val s = service.session ?: return
+            service.queueNotificationMessage(s, BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, payload))
+        }
+
+        /** Per-app setting changed on the phone; turning an app off also clears its notifications on the PC. */
+        fun setAppMirrored(mirror: NotificationMirror, appId: String, mirrored: Boolean) {
+            val dismissals = mirror.setAppAllowed(appId, mirrored)
+            val service = instance ?: return
+            val s = service.session ?: return
+            dismissals.forEach { service.queueNotificationMessage(s, BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, it)) }
+        }
+
         /** Forgets the paired PC on this phone and stops connecting to it. */
         suspend fun forgetPc(context: Context) {
             val store = SharedPrefsPairedDeviceStore(context)
@@ -94,6 +127,14 @@ class BridgeConnectionService : Service() {
         clipboardSync = ClipboardSyncClient(AndroidClipboardAccess(this), scope).apply {
             enabled = isClipboardSyncEnabled(this@BridgeConnectionService)
         }
+        scope.launch {
+            val mirror = (application as BridgeApplication).notificationMirror
+            for ((s, message) in notificationQueue) {
+                // A post that didn't make it is sent again on the next update instead of being skipped as a repeat.
+                if (!s.send(message) && message.type == MessageType.NOTIFICATION_POST)
+                    mirror.forget(message.payloadAs<NotificationPostPayload>().key)
+            }
+        }
         // connectedDevice FGS type; on Android 14 it also needs one of the
         // network permissions declared in the manifest (CHANGE_NETWORK_STATE).
         ServiceCompat.startForeground(
@@ -110,7 +151,8 @@ class BridgeConnectionService : Service() {
     }
 
     private suspend fun connectLoop() {
-        val identity = (application as BridgeApplication).identity
+        val app = application as BridgeApplication
+        val identity = app.identity
         val loop = ReconnectLoop(
             store = store,
             discovery = PcDiscovery(targets = network::broadcastTargets),
@@ -128,6 +170,7 @@ class BridgeConnectionService : Service() {
                         }
                     },
                     statusProvider = ::currentStatus,
+                    notifications = app.notificationMirror,
                 ).also { session = it }
             },
             listener = object : ReconnectLoop.Listener {
@@ -184,9 +227,8 @@ class BridgeConnectionService : Service() {
         _state.update { it.copy(lastTransfer = text) }
     }
 
-    fun sendMessage(message: BridgeMessage) {
-        val s = session ?: return
-        scope.launch { s.send(message) }
+    private fun queueNotificationMessage(s: BridgeClientSession, message: BridgeMessage) {
+        notificationQueue.trySend(s to message)
     }
 
     /** Sends a file to the PC; [deleteAfter] removes a temporary copy afterwards. Returns false if not connected. */
@@ -245,6 +287,7 @@ class BridgeConnectionService : Service() {
         instance = null
         network.stop()
         fileTransfer.state.close() // write any pending resume state
+        notificationQueue.close()
         scope.cancel()
         session?.close()
         if (_state.value.status != Status.UNPAIRED) _state.update { it.copy(status = Status.DISCONNECTED) }

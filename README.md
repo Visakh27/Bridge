@@ -6,7 +6,8 @@ AES-256-GCM encrypted channel over local TCP, private local discovery of a
 paired PC whose address changed, bidirectional chunked/hash-verified file and
 folder transfer that resumes after a dropped connection, text clipboard sync,
 a Windows system-tray app, an Android foreground connection service, and
-notification mirroring — all speaking one shared, versioned JSON protocol
+notification mirroring with actions (reply, the app's own buttons, dismiss,
+per-app filtering) — all speaking one shared, versioned JSON protocol
 (`protocol/protocol.md`).
 
 ```
@@ -26,7 +27,7 @@ privacy model.
 
 This is a genuine starting implementation, not a stub: the protocol,
 authenticated handshake, session encryption, pairing, reconnect, file
-transfer, clipboard sync, status and notification mirroring, and local
+transfer, clipboard sync, status, notification mirroring and actions, and local
 discovery of a paired PC whose address changed are implemented
 on both sides and interoperate (Windows uses .NET's ECDH/ECDSA/HKDF/AES-GCM,
 Android uses the JCE equivalents with matching curve/labels/framing — see
@@ -38,7 +39,7 @@ intentionally left as follow-up work, per the blueprint's own phased roadmap:
 - A production **Room/SQLite**-backed `PairedDeviceStore` on Android (a
   SharedPreferences store is used now) and swapping Windows' JSON-file store
   for SQLite per section 5/14.
-- Notification **actions** (reply/dismiss), **photos/Explorer** integration,
+- **Photos/Explorer** integration,
   **calls**, and **screen mirroring** — all explicitly Phase 2+ / post-MVP in
   the blueprint (sections 12–13, 22–23).
 - App icons/branding assets (placeholders only).

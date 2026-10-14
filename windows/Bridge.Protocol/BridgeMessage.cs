@@ -25,6 +25,9 @@ public static class MessageType
     public const string FileResume = "file.resume";
     public const string NotificationPost = "notification.post";
     public const string NotificationDismiss = "notification.dismiss";
+    public const string NotificationAction = "notification.action";
+    public const string NotificationActionResult = "notification.action.result";
+    public const string NotificationMute = "notification.mute";
     public const string Error = "error";
 }
 
@@ -39,6 +42,8 @@ public static class Features
     public const string FilesResume = "files.resume";
     /// <summary>Folder transfers (file.start relativePath / batch fields).</summary>
     public const string FilesFolders = "files.folders";
+    /// <summary>Reply to, press buttons on, dismiss and mute phone notifications from the PC.</summary>
+    public const string NotificationsActions = "notifications.actions";
 }
 
 /// <summary>Error codes carried in error messages (docs/architecture.md).</summary>

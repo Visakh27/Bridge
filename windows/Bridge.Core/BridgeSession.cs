@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Bridge.Network;
@@ -28,6 +29,10 @@ public sealed class BridgeSession : IAsyncDisposable
     private Task? _presenceLoop;
     private Task? _resumeLoop;
     private int _ended;
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingActions = new();
+
+    /// <summary>How long to wait for the phone to answer a notification action.</summary>
+    public static readonly TimeSpan NotificationActionTimeout = TimeSpan.FromSeconds(15);
 
     public ConnectedDevice Device { get; }
     public event Action<NotificationPostPayload>? NotificationReceived;
@@ -85,6 +90,57 @@ public sealed class BridgeSession : IAsyncDisposable
 
     public Task SendAsync(BridgeMessage message, CancellationToken ct = default) => _channel.SendAsync(message, ct);
 
+    /// <summary>The phone can carry out replies, button presses, dismissals and mutes.</summary>
+    public bool SupportsNotificationActions => Device.PeerFeatures.Contains(Features.NotificationsActions);
+
+    /// <summary>
+    /// Presses button <paramref name="actionId"/> of a phone notification (with
+    /// <paramref name="replyText"/> for reply buttons) and waits for the phone's answer.
+    /// Returns a <see cref="NotificationActionStatus"/>; <c>unavailable</c> if the phone doesn't
+    /// support actions, the connection ends, or there's no answer in time.
+    /// </summary>
+    public async Task<string> InvokeNotificationActionAsync(string key, string actionId, string? replyText,
+        TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        if (!SupportsNotificationActions || !IsRunning) return NotificationActionStatus.Unavailable;
+        if (replyText is not null && (string.IsNullOrWhiteSpace(replyText) || replyText.Length > PhoneNotificationText.MaxReply))
+            return NotificationActionStatus.Invalid;
+        var requestId = Guid.NewGuid().ToString("N");
+        var answer = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingActions[requestId] = answer;
+        try
+        {
+            await _channel.SendAsync(BridgeMessage.Create(MessageType.NotificationAction,
+                new NotificationActionPayload(requestId, key, actionId) { ReplyText = replyText }), ct);
+            if (!IsRunning) return NotificationActionStatus.Unavailable;
+            return await answer.Task.WaitAsync(timeout ?? NotificationActionTimeout, ct);
+        }
+        catch (TimeoutException) { return NotificationActionStatus.Unavailable; }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.Sockets.SocketException or InvalidOperationException)
+        {
+            return NotificationActionStatus.Unavailable;
+        }
+        finally
+        {
+            _pendingActions.TryRemove(requestId, out _);
+        }
+    }
+
+    /// <summary>Clears a notification on the phone. False if the phone doesn't support it or isn't reachable.</summary>
+    public Task<bool> DismissOnPhoneAsync(string key, CancellationToken ct = default) =>
+        SendIfSupportedAsync(BridgeMessage.Create(MessageType.NotificationDismiss, new NotificationDismissPayload(key)), ct);
+
+    /// <summary>Stops the phone mirroring an app's notifications (undone on the phone).</summary>
+    public Task<bool> MuteAppOnPhoneAsync(string appId, CancellationToken ct = default) =>
+        SendIfSupportedAsync(BridgeMessage.Create(MessageType.NotificationMute, new NotificationMutePayload(appId)), ct);
+
+    private async Task<bool> SendIfSupportedAsync(BridgeMessage message, CancellationToken ct)
+    {
+        if (!SupportsNotificationActions || !IsRunning) return false;
+        try { await _channel.SendAsync(message, ct); return true; }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.Sockets.SocketException or InvalidOperationException) { return false; }
+    }
+
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         try
@@ -141,10 +197,17 @@ public sealed class BridgeSession : IAsyncDisposable
                 StatusChanged?.Invoke(Device);
                 break;
             case MessageType.NotificationPost:
-                NotificationReceived?.Invoke(message.PayloadAs<NotificationPostPayload>());
+                if (PhoneNotificationText.Clean(message.PayloadAs<NotificationPostPayload>()) is { } note)
+                    NotificationReceived?.Invoke(SupportsNotificationActions ? note : note with { Actions = null, CanDismiss = null, AppId = null });
                 break;
             case MessageType.NotificationDismiss:
-                NotificationDismissed?.Invoke(message.PayloadAs<NotificationDismissPayload>().Key);
+                if (message.PayloadAs<NotificationDismissPayload>().Key is { Length: > 0 } dismissedKey)
+                    NotificationDismissed?.Invoke(dismissedKey);
+                break;
+            case MessageType.NotificationActionResult:
+                var result = message.PayloadAs<NotificationActionResultPayload>();
+                if (result.RequestId is not null && _pendingActions.TryGetValue(result.RequestId, out var waiting))
+                    waiting.TrySetResult(result.Status ?? NotificationActionStatus.Failed);
                 break;
             case MessageType.CapabilitiesAdvertise:
                 Device.PeerFeatures = message.PayloadAs<CapabilitiesPayload>().Features ?? [];
@@ -192,6 +255,7 @@ public sealed class BridgeSession : IAsyncDisposable
         _cts.Cancel();
         Device.IsConnected = false;
         if (ReferenceEquals(_clipboard.Channel, _channel)) _clipboard.Channel = null;
+        foreach (var waiting in _pendingActions.Values) waiting.TrySetResult(NotificationActionStatus.Unavailable);
         _fileTransfer.AbortAll(_channel);
         await _channel.DisposeAsync();
         StatusChanged?.Invoke(Device);

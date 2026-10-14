@@ -1,5 +1,6 @@
 package com.bridge.app.network
 
+import com.bridge.app.notifications.NotificationCommandHandler
 import com.bridge.app.protocol.*
 import com.bridge.app.security.IdentityKey
 import java.io.File
@@ -37,6 +38,8 @@ class BridgeClientSession(
     private val peerTimeoutMs: Long = 45_000,
     private val statusIntervalMs: Long = 60_000,
     private val connect: suspend (host: String, port: Int) -> TcpTransport = TcpTransport::connect,
+    /** Carries out the PC's notification requests (reply, buttons, dismiss, mute); null = not offered. */
+    private val notifications: NotificationCommandHandler? = null,
 ) : SessionHandle {
     interface Listener {
         fun onConnected(peerFeatures: List<String>) {}
@@ -48,6 +51,10 @@ class BridgeClientSession(
         val LOCAL_FEATURES = listOf(Features.FILES, Features.CLIPBOARD, Features.NOTIFICATIONS, Features.FILES_RESUME, Features.FILES_FOLDERS)
         private const val SETUP_TIMEOUT_MS = 20_000L
     }
+
+    /** What this phone advertises: notification actions only when something can carry them out. */
+    val localFeatures: List<String> =
+        if (notifications != null) LOCAL_FEATURES + Features.NOTIFICATIONS_ACTIONS else LOCAL_FEATURES
 
     @Volatile private var channel: EncryptedChannel? = null
     @Volatile private var lastSeen = System.currentTimeMillis()
@@ -67,7 +74,7 @@ class BridgeClientSession(
             val transport = connect(pc.host, pc.port)
             val ch = EncryptedChannel.handshakeAsInitiator(transport, identity, pc.publicKey())
             try {
-                ch.send(BridgeMessage.create(MessageType.CAPABILITIES_ADVERTISE, CapabilitiesPayload(LOCAL_FEATURES)))
+                ch.send(BridgeMessage.create(MessageType.CAPABILITIES_ADVERTISE, CapabilitiesPayload(localFeatures)))
                 val reply = ch.receive()
                 when (reply.type) {
                     MessageType.CAPABILITIES_ADVERTISE -> {
@@ -158,8 +165,13 @@ class BridgeClientSession(
                 fileTransfer.handleIncoming(ch, message, downloadDir)
             MessageType.PRESENCE_PING -> ch.send(BridgeMessage.createEmpty(MessageType.PRESENCE_PONG))
             MessageType.PRESENCE_PONG -> Unit // lastSeen already updated
-            MessageType.CAPABILITIES_ADVERTISE ->
-                clipboard.peerSupportsClipboard = Features.CLIPBOARD in message.payloadAs<CapabilitiesPayload>().features
+            MessageType.NOTIFICATION_ACTION, MessageType.NOTIFICATION_DISMISS, MessageType.NOTIFICATION_MUTE ->
+                notifications?.handleIncoming(message) { ch.send(it) }
+            MessageType.CAPABILITIES_ADVERTISE -> {
+                val features = message.payloadAs<CapabilitiesPayload>().features
+                peerFeatures = features
+                clipboard.peerSupportsClipboard = Features.CLIPBOARD in features
+            }
             MessageType.ERROR -> listener.onPeerError(message.payloadAs<ErrorPayload>())
             else -> Unit // unknown types from a newer peer are ignored (protocol.md, Versioning)
         }
@@ -199,6 +211,9 @@ class BridgeClientSession(
     }
 
     @Volatile private var peerFeatures: List<String> = emptyList()
+
+    /** Whether the connected PC advertised [feature] (false when not connected). */
+    fun peerSupports(feature: String): Boolean = isConnected && feature in peerFeatures
 
     /** What the connected PC supports, for outgoing transfers. */
     fun sendOptions() = SendOptions(pc.deviceId, Features.FILES_RESUME in peerFeatures, Features.FILES_FOLDERS in peerFeatures)

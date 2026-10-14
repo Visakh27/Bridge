@@ -4,11 +4,20 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.bridge.app.notifications.ListenerNotificationSource
+import com.bridge.app.notifications.NotificationFilter
+import com.bridge.app.notifications.NotificationMirror
+import com.bridge.app.notifications.SharedPrefsNotificationFilterStore
 import com.bridge.app.security.DeviceIdentity
 
 class BridgeApplication : Application() {
     lateinit var identity: DeviceIdentity
         private set
+
+    /** Mirroring rules, per-app choices and the PC's notification requests (shared by listener and service). */
+    val notificationMirror: NotificationMirror by lazy {
+        NotificationMirror(NotificationFilter(SharedPrefsNotificationFilterStore(this)), ListenerNotificationSource, packageName)
+    }
 
     companion object {
         const val CONNECTION_CHANNEL_ID = "bridge_connection"

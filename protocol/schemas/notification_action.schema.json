@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NotificationActionPayload",
+  "description": "PC -> phone (notifications.actions): press button actionId of notification key; replyText only (and always) for reply buttons. The phone answers notification.action.result with the same requestId.",
+  "type": "object",
+  "required": [
+    "requestId",
+    "key",
+    "actionId"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "replyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    }
+  }
+}

@@ -394,14 +394,22 @@ public sealed class ResumeAndFolderTests : IDisposable
         var root = Path.Combine(_src, "Album");
         for (var i = 0; i < 6; i++) MakeFile(Path.Combine("Album", $"p{i}.jpg"), 8, seed: i);
 
-        // Cut the link during the third file.
+        // Cut the link when the third file is announced. The receiver is held there until the
+        // cut, so the cut always lands mid-folder (a fixed delay raced a fast loopback link).
         var cut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
         var link = await Link.ConnectAsync(_phone, sender, _src, _pc, receiver, _dl,
-            onReceiver: m => { if (m.Type == MessageType.FileStart && m.PayloadAs<FileStartPayload>().BatchIndex == 2) cut.TrySetResult(); });
+            onReceiver: m =>
+            {
+                if (m.Type != MessageType.FileStart || m.PayloadAs<FileStartPayload>().BatchIndex != 2) return;
+                cut.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(10));
+            });
         var sending = sender.SendFolderAsync(link.Sender, root, ToPc());
         await cut.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await Task.Delay(50);
-        await link.CutAsync();
+        var cutting = link.CutAsync(); // the sender's side goes first, so it never hears back about file 3
+        release.Set();
+        await cutting;
         var partial = await sending.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Contains(partial, r => r.Status == TransferStatus.Interrupted);
         var completedBefore = partial.Count(r => r.Status == TransferStatus.Completed);

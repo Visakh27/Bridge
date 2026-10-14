@@ -18,5 +18,8 @@ object MessageType {
     const val FILE_RESUME = "file.resume"
     const val NOTIFICATION_POST = "notification.post"
     const val NOTIFICATION_DISMISS = "notification.dismiss"
+    const val NOTIFICATION_ACTION = "notification.action"
+    const val NOTIFICATION_ACTION_RESULT = "notification.action.result"
+    const val NOTIFICATION_MUTE = "notification.mute"
     const val ERROR = "error"
 }

@@ -57,7 +57,20 @@
    the PC); handshakes time out after 15 s. Failures inside one message
    handler (a locked Windows clipboard, a disk error) are contained to that
    message and never drop the connection.
-10. **Logging** — diagnostic logs record connection/transfer *metadata*
+10. **Notification actions** — the paired PC can do with a mirrored
+   notification what the user could do from the phone's notification shade,
+   and nothing more: reply, press the app's own buttons, dismiss, or stop that
+   app being mirrored. It can't open apps on the phone (buttons that would are
+   not offered), press buttons the app marked as needing the phone unlocked,
+   or act on notifications Bridge doesn't mirror (apps turned off on the phone,
+   ongoing or secret ones); every request is checked against the notification
+   as it is at that moment. Button ids depend on the button's title, so a stale
+   id from the PC can't press a different button the app put in its place.
+   Only the phone can turn a muted app back on. On the PC, notification text is
+   treated as untrusted (control and bidi-override characters removed, lengths
+   capped), and toast arguments are encoded so no notification content can
+   change what a click does.
+11. **Logging** — diagnostic logs record connection/transfer *metadata*
    (timestamps, byte counts, error codes) and never message payload contents.
 
 ## Known limits (MVP)
@@ -65,5 +78,6 @@
 - Discovery only works where the network passes UDP broadcast between
   devices; networks with client isolation (some guest/hotel Wi-Fi) block it,
   and the phone can then only reach the PC at its last known address.
-- Notification contents are sent to the PC in full once the user grants
-  notification access; per-app filtering is follow-up work.
+- Notification contents of the apps the user leaves on are sent to the PC in
+  full once notification access is granted. New apps are mirrored by default;
+  the phone's "Notifications on your PC" screen can turn that off.

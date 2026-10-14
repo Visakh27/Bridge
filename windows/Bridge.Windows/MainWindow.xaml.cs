@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private readonly TcpBridgeListener _listener;
     private readonly DiscoveryResponder? _discovery;
     private readonly BridgeHost _host;
+    private readonly NotificationActionRouter _notificationActions;
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherQueueTimer _qrTimer;
     private BridgeSession? _session;
@@ -47,6 +48,7 @@ public sealed partial class MainWindow : Window
         _clipboard = new ClipboardSyncService(new WindowsClipboardAccess(DispatcherQueue));
         _listener = new TcpBridgeListener(); // fixed port so paired phones can find us again
         _host = new BridgeHost(identity, store, _pairing, _fileTransfer, _clipboard, _downloadDir);
+        _notificationActions = new NotificationActionRouter(_host);
 
         _fileTransfer.ProgressChanged += OnTransferProgress;
         _host.DevicePaired += device => DispatcherQueue.TryEnqueue(() =>
@@ -251,23 +253,87 @@ public sealed partial class MainWindow : Window
     private static string NotificationTag(string key) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..32]; // tags are limited to 64 chars
 
-    private static void ShowPhoneNotification(NotificationPostPayload note)
+    private void ShowPhoneNotification(NotificationPostPayload note)
     {
         try
         {
-            var notification = new AppNotificationBuilder()
+            var builder = new AppNotificationBuilder()
+                .AddArgument("bridge", NotificationToastCommand.Open)
                 .AddText(note.Title)
-                .AddText(note.Text)
-                .SetAttributionText(note.AppName)
-                .BuildNotification();
+                .SetAttributionText(note.AppName);
+            if (note.Text.Length > 0) builder.AddText(note.Text);
+            // Windows allows 5 buttons. One reply box (Windows supports a single
+            // inline text box well), the phone's own buttons, then Dismiss.
+            var buttons = 0;
+            var replied = false;
+            foreach (var action in note.Actions ?? [])
+            {
+                if (buttons >= 4) break;
+                if (action.Reply == true)
+                {
+                    if (replied) continue;
+                    replied = true;
+                    builder.AddTextBox(NotificationToastCommand.ReplyInputId, "Reply", "");
+                    builder.AddButton(Button(action.Title.Length > 0 ? action.Title : "Send",
+                        new NotificationToastCommand(NotificationToastCommand.Reply, note.Key, action.Id)).SetInputId(NotificationToastCommand.ReplyInputId));
+                }
+                else
+                {
+                    builder.AddButton(Button(action.Title, new NotificationToastCommand(NotificationToastCommand.Press, note.Key, action.Id)));
+                }
+                buttons++;
+            }
+            if (note.CanDismiss == true)
+                builder.AddButton(Button("Dismiss", new NotificationToastCommand(NotificationToastCommand.Dismiss, note.Key)));
+            if (note.AppId is not null)
+                builder.AddButton(Button($"Stop {note.AppName} notifications",
+                    new NotificationToastCommand(NotificationToastCommand.Mute, AppId: note.AppId)).SetContextMenuPlacement());
+
+            var notification = builder.BuildNotification();
             notification.Tag = NotificationTag(note.Key);
             notification.Group = NotificationGroup;
+            // The app's own update after a reply from here ("You: …"): update it quietly, don't pop up again.
+            notification.SuppressDisplay = _notificationActions.TakeRecentAction(note.Key);
             AppNotificationManager.Default.Show(notification);
+            lock (AppNames) { AppNames[note.Key] = note.AppName; if (AppNames.Count > 500) AppNames.Clear(); }
         }
         catch (Exception)
         {
             // Notifications unavailable (e.g. disabled for the app); mirroring is best effort.
         }
+    }
+
+    /// <summary>App name per notification key, for failure messages after a click.</summary>
+    private static readonly Dictionary<string, string> AppNames = new();
+
+    private static AppNotificationButton Button(string title, NotificationToastCommand command)
+    {
+        var button = new AppNotificationButton(title);
+        foreach (var (k, v) in command.ToArguments()) button.AddArgument(k, v);
+        return button;
+    }
+
+    /// <summary>A toast (or one of its buttons) was clicked; also used when Windows launched Bridge from a toast.</summary>
+    public async void OnToastInvoked(IDictionary<string, string> arguments, IDictionary<string, string> userInput)
+    {
+        var command = NotificationToastCommand.Parse(arguments);
+        if (command.Kind == NotificationToastCommand.Open)
+        {
+            DispatcherQueue.TryEnqueue(App.ShowMainWindow);
+            return;
+        }
+        string? status;
+        try { status = await command.RunAsync(_notificationActions, userInput, _cts.Token); }
+        catch (OperationCanceledException) { return; }
+        string appName = "the app";
+        if (command.Key is not null) lock (AppNames) { if (AppNames.TryGetValue(command.Key, out var n)) appName = n; }
+        if (command.FailureMessage(status, appName) is { } message) ShowInfo(message);
+    }
+
+    private static void ShowInfo(string message)
+    {
+        try { AppNotificationManager.Default.Show(new AppNotificationBuilder().AddText("Bridge").AddText(message).BuildNotification()); }
+        catch (Exception) { }
     }
 
     private static async void RemovePhoneNotification(string key)

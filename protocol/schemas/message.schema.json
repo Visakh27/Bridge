@@ -33,6 +33,9 @@
         "file.resume",
         "notification.post",
         "notification.dismiss",
+        "notification.action",
+        "notification.action.result",
+        "notification.mute",
         "error"
       ]
     },

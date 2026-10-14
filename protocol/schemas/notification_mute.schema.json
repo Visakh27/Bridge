@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NotificationMutePayload",
+  "description": "PC -> phone (notifications.actions): stop mirroring this app's notifications; the user turns it back on on the phone.",
+  "type": "object",
+  "required": [
+    "appId"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "appId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._]{1,255}$"
+    }
+  }
+}

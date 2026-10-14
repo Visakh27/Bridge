@@ -23,7 +23,7 @@ import com.bridge.app.service.BridgeConnectionService
 
 /**
  * Section 4.2 (connected state): connection status, the clipboard sync
- * toggle, notification-mirroring access, and forgetting the PC. File sending
+ * toggle, notification-mirroring access and per-app choices, and forgetting the PC. File sending
  * from Android happens via the share sheet (see MainActivity), not here.
  */
 @Composable
@@ -42,6 +42,7 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     var confirmForget by remember { mutableStateOf(false) }
+    var showApps by remember { mutableStateOf(false) }
     // Android's share sheet can't share folders, so folders go through the system folder picker.
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -53,6 +54,11 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
                 ContextCompat.getMainExecutor(context).execute { Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
             }
         }
+    }
+
+    if (showApps) {
+        NotificationAppsScreen(onBack = { showApps = false })
+        return
     }
 
     Column(Modifier.fillMaxSize().padding(24.dp)) {
@@ -92,7 +98,9 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
                 })
             }) { Text("Show phone notifications on your PC") }
         } else {
-            Text("Phone notifications are mirrored to your PC.", style = MaterialTheme.typography.bodyMedium)
+            Text("Phone notifications are mirrored to your PC. Reply, dismiss or press their buttons there.",
+                style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { showApps = true }) { Text("Choose apps") }
         }
 
         Spacer(Modifier.height(24.dp))

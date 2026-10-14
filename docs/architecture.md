@@ -37,6 +37,15 @@ Bridge.Security ────────┤    platform)         ├────
   Windows Clipboard/Notification APIs) and the Android `ui/`, `notifications/`,
   `service/` packages (Compose UI, NotificationListenerService, foreground
   connection service).
+- **Notifications** — on Android, `notifications/NotificationMirror` holds the
+  rules (what is mirrored, per-app `NotificationFilter`, button ids, what the
+  PC may do) as plain Kotlin; `BridgeNotificationListener` only converts
+  StatusBarNotifications and carries out button presses/replies. On Windows,
+  `BridgeSession` cleans incoming text (`PhoneNotificationText`) and tracks
+  action requests; `NotificationActionRouter` carries out toast clicks, waiting
+  briefly for the phone if it is reconnecting; `NotificationToastCommand` is
+  what a toast button carries. Bridge.Windows only builds toasts and forwards
+  clicks.
 
 ## Error codes
 
