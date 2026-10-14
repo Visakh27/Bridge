@@ -50,7 +50,10 @@ cd android
    Android 10+, copies made on the phone are only sent while Bridge is open
    (a platform privacy rule); PC → phone works in the background.
 6. Tap "Show phone notifications on your PC" on Android and grant
-   notification access to mirror notifications.
+   notification access to mirror notifications. On the PC, a mirrored
+   message has a reply box and the app's own buttons (e.g. "Mark as read"),
+   plus Dismiss; right-click (or "…") for "Stop <app> notifications". On the
+   phone, "Choose apps" picks which apps appear on the PC.
 
 ## Testing
 
@@ -92,7 +95,19 @@ cd android
   write cost on 5,000-item queues, and crash-safe journals. Cross-platform
   (`e2e-resume`): 30 MB files resumed both ways (one into a restarted phone
   app), folders both ways with non-ASCII names, and an interrupted folder.
-- Manual/integration still needed on real devices: Android folder picker and
+- Notification actions: `NotificationActionTests` (xUnit) and
+  `NotificationActionsTest` (JUnit) cover what is mirrored and what isn't,
+  button ids and stale buttons, reply/press/dismiss/mute and their refusals,
+  per-app choices and their storage, updates that stop qualifying, removals
+  after an app restart, the PC waiting for a reconnecting phone, toast
+  argument encoding, untrusted text, and random/malformed messages both ways.
+  Cross-platform (`e2e-notifications`): the Windows host and the phone session
+  exchange real posts, replies, button presses, dismissals and mutes,
+  including a click made while the phone was disconnected and a phone app
+  restart; messages from both platforms are checked against the schemas.
+- Manual/integration still needed on real devices: replying from Windows
+  toasts in a few messaging apps (WhatsApp, Messages, Telegram, Gmail),
+  toast buttons after Bridge was closed (Windows relaunches it), Android folder picker and
   copying large folders to cache, resume over a real Wi-Fi drop, discovery on real Wi-Fi
   (some routers block broadcast between clients), camera QR scanning,
   reconnection after Wi‑Fi drop, large-file transfer, clipboard sync across a
