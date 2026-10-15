@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 108dp adaptive-icon foreground: a simple bridge arch over a deck, inside the 72dp safe zone. -->
+<!-- Generated from tools/icons/generate_icons.py (android-paths mode): an arch bridge. -->
+<!-- Adaptive-icon foreground (108dp, glyph inside the 66dp safe zone); also the themed (monochrome) icon. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -8,13 +9,19 @@
     <path
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="5"
+        android:strokeWidth="5.94"
         android:strokeLineCap="round"
-        android:pathData="M34,64 Q54,30 74,64" />
+        android:pathData="M32.22,69.84 C34.86,43.44 73.14,43.44 75.78,69.84" />
     <path
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="5"
+        android:strokeWidth="3.30"
         android:strokeLineCap="round"
-        android:pathData="M30,64 L78,64" />
+        android:pathData="M38.82,39.48 L38.82,55.82 M46.74,39.48 L46.74,51.19 M54.00,39.48 L54.00,50.04 M61.26,39.48 L61.26,51.19 M69.18,39.48 L69.18,55.82" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.94"
+        android:strokeLineCap="round"
+        android:pathData="M28.92,39.48 L79.08,39.48" />
 </vector>

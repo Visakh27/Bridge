@@ -7,7 +7,8 @@ paired PC whose address changed, bidirectional chunked/hash-verified file and
 folder transfer that resumes after a dropped connection, text clipboard sync,
 a Windows system-tray app, an Android foreground connection service, and
 notification mirroring with actions (reply, the app's own buttons, dismiss,
-per-app filtering) — all speaking one shared, versioned JSON protocol
+per-app filtering), first-run guides, settings, a privacy-safe diagnostics log,
+recent transfers with retry, and MSIX packaging — all speaking one shared, versioned JSON protocol
 (`protocol/protocol.md`).
 
 ```
@@ -42,7 +43,8 @@ intentionally left as follow-up work, per the blueprint's own phased roadmap:
 - **Photos/Explorer** integration,
   **calls**, and **screen mirroring** — all explicitly Phase 2+ / post-MVP in
   the blueprint (sections 12–13, 22–23).
-- App icons/branding assets (placeholders only).
+- Store submission (the MSIX is sideload-signed with a dev certificate;
+  Android release signing is not set up).
 
 ## Building
 

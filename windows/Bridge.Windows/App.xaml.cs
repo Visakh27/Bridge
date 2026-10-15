@@ -33,20 +33,39 @@ public partial class App : Application
             // Notifications unavailable on this system; everything else still works.
         }
 
+        AppActivationArguments? activation = null;
+        try { activation = AppInstance.GetCurrent().GetActivatedEventArgs(); } catch (Exception) { }
+
         MainWindowInstance = new MainWindow();
-        MainWindowInstance.Activate();
+        // Started at sign-in (Run key with --minimized, or the MSIX StartupTask), or the user prefers
+        // the tray: stay hidden. Never before the first-run guide has been seen.
+        var atSignIn = Environment.GetCommandLineArgs().Contains(StartupRegistration.MinimizedArg)
+            || activation?.Kind == ExtendedActivationKind.StartupTask;
+        var fromToast = activation?.Kind == ExtendedActivationKind.AppNotification;
+        // From a toast, OnToastInvoked decides: a reply or button press stays in the tray, a plain click opens the window.
+        if (!fromToast && !MainWindowInstance.ShouldStartHidden(atSignIn)) MainWindowInstance.Activate();
 
         // Launched by clicking a toast (e.g. a reply typed after Bridge was closed): carry it out
         // once the phone reconnects (NotificationActionRouter waits briefly for it).
-        try
-        {
-            var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
-            if (activation.Kind == ExtendedActivationKind.AppNotification && activation.Data is AppNotificationActivatedEventArgs toast)
-                MainWindowInstance.OnToastInvoked(toast.Arguments, toast.UserInput);
-        }
-        catch (Exception) { }
+        if (fromToast && activation!.Data is AppNotificationActivatedEventArgs toast)
+            MainWindowInstance.OnToastInvoked(toast.Arguments, toast.UserInput);
 
         _tray = new TrayIcon(ShowMainWindow, () => _ = ExitAsync());
+    }
+
+    /// <summary>Another launch was handed to this instance (see Program): show the window or handle the toast.</summary>
+    public static void OnRedirectedActivation(AppActivationArguments e)
+    {
+        var window = MainWindowInstance;
+        if (window is null) return;
+        if (e.Kind == ExtendedActivationKind.AppNotification && e.Data is AppNotificationActivatedEventArgs toast)
+            window.OnToastInvoked(toast.Arguments, toast.UserInput);
+        else if (e.Kind == ExtendedActivationKind.StartupTask ||
+                 (e.Data is global::Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launch &&
+                  (launch.Arguments ?? "").Contains(StartupRegistration.MinimizedArg)))
+            return; // a sign-in start while already running: stay in the tray
+        else
+            window.DispatcherQueue.TryEnqueue(ShowMainWindow);
     }
 
     public static void ShowMainWindow()

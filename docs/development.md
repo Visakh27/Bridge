@@ -28,17 +28,40 @@ cd android
 # or open android/ in Android Studio and run the `app` configuration
 ```
 
-`Bridge.Windows` runs unpackaged by default. To produce an MSIX, set
-`WindowsPackageType` to `MSIX` in `Bridge.Windows.csproj` (the manifest is
-`Bridge.Windows/Package.appxmanifest`) or use Publish › Create App Packages.
+`Bridge.Windows` runs unpackaged by default (F5 in Visual Studio).
+
+## Packaging (MSIX)
+
+```
+# Windows, PowerShell, from the repo root (needs Visual Studio 2022):
+.\windows\scripts\package-msix.ps1 -CreateDevCert          # x64, self-signed "CN=Bridge Dev"
+.\windows\scripts\package-msix.ps1 -Platform arm64 -CertThumbprint <thumbprint>
+```
+
+The script builds a sideload MSIX into `windows/AppPackages/`, signs it, and
+prints how to trust the dev certificate on a test PC (once, as admin) and
+install it. The manifest (`Bridge.Windows/Package.appxmanifest`) declares:
+toast activation (so reply/buttons work when Bridge was closed), the
+`BridgeStartup` startup task (Settings › "Start Bridge when I sign in"), and
+inbound firewall rules for TCP 47820 and UDP 47821 on **private** networks
+only. If TCP 47820 is taken and Bridge falls back to another port, Windows
+asks about the firewall for that port. `Publisher` must match the signing
+certificate's subject. Versions: `<Version>` in `Bridge.Windows.csproj`,
+`Identity Version` in the manifest, and `versionName`/`versionCode` in
+`android/app/build.gradle.kts` move together (0.2.0 now).
+
+Icons are generated from one design by `tools/icons/generate_icons.py`
+(Pillow): every Windows scale/targetsize PNG, `Bridge.ico` (window, taskbar
+and tray), and the path data for the Android vector icons (adaptive, themed
+and status-bar). `--check` verifies the committed assets.
 
 ## Running the vertical slice locally
 
-1. Launch the Windows app — it shows a QR code. Allow it through Windows
+1. Launch the Windows app — a short first-run guide, then a QR code. Allow it through Windows
    Firewall on **private** networks when prompted (it listens on TCP 47820
    and, for discovery, UDP 47821).
-2. Launch the Android app on a phone on the **same Wi‑Fi network** as the PC
-   and allow camera access.
+2. Launch the Android app on a phone on the **same Wi‑Fi network** as the PC,
+   go through the three-step guide and allow camera access.
 3. Scan the QR code. The phone pairs, then connects; the PC switches to the
    dashboard.
 4. Drag files or folders onto the Windows dashboard to send them to the phone
@@ -95,6 +118,16 @@ cd android
   write cost on 5,000-item queues, and crash-safe journals. Cross-platform
   (`e2e-resume`): 30 MB files resumed both ways (one into a restarted phone
   app), folders both ways with non-ASCII names, and an interrupted folder.
+- Polish: `PolishTests` (xUnit) and `PolishTest` (JUnit) cover the
+  diagnostics log (only safe field shapes, rotation and caps, retention,
+  disabled/cleared, concurrent writers, unwritable folders), a real session
+  logged end to end with no names, contents or keys in the log or report,
+  settings (defaults, persistence, corruption, folder validation, unwritable
+  storage), a download-folder change applying to a live session, recent
+  transfers with Retry/Open rules, retry copies kept/deleted/swept on the
+  phone, and the reconnect loop's failure/countdown hooks. The resume and
+  notification E2E runs also log on both sides and fail if a file name,
+  folder name, notification text or device name appears in either log.
 - Notification actions: `NotificationActionTests` (xUnit) and
   `NotificationActionsTest` (JUnit) cover what is mirrored and what isn't,
   button ids and stale buttons, reply/press/dismiss/mute and their refusals,
@@ -105,7 +138,12 @@ cd android
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: replying from Windows
+- Manual/integration still needed on real devices: the new WinUI and Compose
+  screens (first-run guides, Settings, Recent transfers), start at sign-in
+  (unpackaged and MSIX), a second launch handing over to the running Bridge,
+  installing the MSIX (firewall rules, toast activation), the icons on
+  Windows (Start, taskbar, tray) and Android (launcher, themed icon, status
+  bar), sharing the diagnostics report, replying from Windows
   toasts in a few messaging apps (WhatsApp, Messages, Telegram, Gmail),
   toast buttons after Bridge was closed (Windows relaunches it), Android folder picker and
   copying large folders to cache, resume over a real Wi-Fi drop, discovery on real Wi-Fi

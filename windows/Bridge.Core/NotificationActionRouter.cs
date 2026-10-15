@@ -25,6 +25,11 @@ public sealed class NotificationActionRouter
 
     public TimeSpan SessionWait { get; }
 
+    /// <summary>Diagnostics: (kind, status) after each reply/press/dismiss/mute.</summary>
+    public event Action<string, string>? Completed;
+
+    private T Report<T>(string kind, T result, string status) { Completed?.Invoke(kind, status); return result; }
+
     /// <summary>After a reply/press, the app's own update of that notification is expected for this long.</summary>
     public static readonly TimeSpan EchoWindow = TimeSpan.FromSeconds(15);
 
@@ -67,20 +72,30 @@ public sealed class NotificationActionRouter
     {
         text = text?.Trim();
         if (string.IsNullOrEmpty(text) || text.Length > PhoneNotificationText.MaxReply) return NotificationActionStatus.Invalid;
-        return await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, text, _actionTimeout, ct), ct);
+        var status = await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, text, _actionTimeout, ct), ct);
+        return Report("reply", status, status);
     }
 
     /// <summary>Presses a (non-reply) button.</summary>
-    public async Task<string> PressAsync(string key, string actionId, CancellationToken ct = default) =>
-        await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, null, _actionTimeout, ct), ct);
+    public async Task<string> PressAsync(string key, string actionId, CancellationToken ct = default)
+    {
+        var status = await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, null, _actionTimeout, ct), ct);
+        return Report("press", status, status);
+    }
 
     /// <summary>Clears the notification on the phone.</summary>
-    public async Task<bool> DismissAsync(string key, CancellationToken ct = default) =>
-        await SessionAsync(ct) is { } session && await session.DismissOnPhoneAsync(key, ct);
+    public async Task<bool> DismissAsync(string key, CancellationToken ct = default)
+    {
+        var ok = await SessionAsync(ct) is { } session && await session.DismissOnPhoneAsync(key, ct);
+        return Report("dismiss", ok, ok ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable);
+    }
 
     /// <summary>Stops mirroring an app's notifications.</summary>
-    public async Task<bool> MuteAppAsync(string appId, CancellationToken ct = default) =>
-        await SessionAsync(ct) is { } session && await session.MuteAppOnPhoneAsync(appId, ct);
+    public async Task<bool> MuteAppAsync(string appId, CancellationToken ct = default)
+    {
+        var ok = await SessionAsync(ct) is { } session && await session.MuteAppOnPhoneAsync(appId, ct);
+        return Report("mute", ok, ok ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable);
+    }
 
     /// <summary>The live session if its phone supports actions, else the next one that starts within <see cref="SessionWait"/>.</summary>
     private async Task<BridgeSession?> SessionAsync(CancellationToken ct)

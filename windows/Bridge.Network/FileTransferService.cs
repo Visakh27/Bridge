@@ -33,6 +33,8 @@ public sealed class TransferProgress
     public int? BatchCount { get; init; }
     /// <summary>Chunk the transfer (re)started from: &gt; 0 when it was resumed.</summary>
     public int ResumedFrom { get; set; }
+    /// <summary>Sending: the local file being sent (for "Retry").</summary>
+    public string? SourcePath { get; init; }
     public double Fraction => TotalChunks == 0 ? (Status == TransferStatus.Completed ? 1 : 0) : (double)ChunksDone / TotalChunks;
 }
 
@@ -197,7 +199,7 @@ public sealed class FileTransferService
         var transferId = entry.TransferId;
         var progress = new TransferProgress
         {
-            TransferId = transferId, FileName = entry.FileName, Direction = TransferDirection.Sending,
+            TransferId = transferId, FileName = entry.FileName, Direction = TransferDirection.Sending, SourcePath = entry.FilePath,
             RelativePath = entry.RelativePath, BatchId = entry.BatchId, BatchIndex = entry.BatchIndex, BatchCount = entry.BatchCount,
         };
 

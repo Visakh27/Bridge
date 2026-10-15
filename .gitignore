@@ -9,3 +9,8 @@ android/**/build/
 android/local.properties
 *.iml
 .idea/
+
+# MSIX output (windows/scripts/package-msix.ps1)
+windows/AppPackages/
+*.msix
+*.cer

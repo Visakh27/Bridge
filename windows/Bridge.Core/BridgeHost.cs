@@ -26,7 +26,7 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly PairingService _pairing;
     private readonly FileTransferService _fileTransfer;
     private readonly ClipboardSyncService _clipboard;
-    private readonly string _downloadDir;
+    private string _downloadDir;
     private readonly SemaphoreSlim _sessionLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private BridgeSession? _current;
@@ -43,6 +43,13 @@ public sealed class BridgeHost : IAsyncDisposable
     }
 
     public BridgeSession? CurrentSession => Volatile.Read(ref _current);
+
+    /// <summary>Where received files go; a change applies to the next file, also in a live session.</summary>
+    public string DownloadDirectory
+    {
+        get => Volatile.Read(ref _downloadDir);
+        set => Volatile.Write(ref _downloadDir, value);
+    }
 
     public event Action<PairedDevice>? DevicePaired;
     /// <summary>Raised on a new session; subscribe to the session's own events from here.</summary>
@@ -150,7 +157,7 @@ public sealed class BridgeHost : IAsyncDisposable
         };
         await channel.SendAsync(BridgeMessage.Create(MessageType.CapabilitiesAdvertise, new CapabilitiesPayload(LocalFeatures)), ct);
 
-        var session = new BridgeSession(channel, device, _fileTransfer, _clipboard, _downloadDir);
+        var session = new BridgeSession(channel, device, _fileTransfer, _clipboard, () => DownloadDirectory);
         session.Ended += OnSessionEnded;
 
         await _sessionLock.WaitAsync(ct);

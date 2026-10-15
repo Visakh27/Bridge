@@ -20,6 +20,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.bridge.app.core.BridgeApplication
+import com.bridge.app.core.LogField
 import com.bridge.app.network.PairingClient
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -60,10 +62,13 @@ fun PairingScreen(
                 statusText = "Pairing…"
                 pairingClient.pairFromQrContent(rawValue, deviceName)
                     .onSuccess { pairing ->
+                        val log = (context.applicationContext as BridgeApplication).diagnostics
+                        log.info("pair.succeeded", LogField.id("peer", pairing.device.deviceId, log))
                         statusText = "Paired with ${pairing.device.deviceName}"
                         onPaired()
                     }
                     .onFailure { error ->
+                        (context.applicationContext as BridgeApplication).diagnostics.warn("pair.failed", LogField.error(error))
                         statusText = "Pairing failed: ${error.message ?: "couldn't reach the PC. Are both devices on the same Wi-Fi?"}"
                         handled = false
                     }

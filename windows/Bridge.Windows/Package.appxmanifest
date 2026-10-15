@@ -1,16 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Single-project MSIX manifest. Bridge.Windows runs unpackaged by default
-  (WindowsPackageType=None, so F5 just works); set WindowsPackageType to MSIX
-  in Bridge.Windows.csproj, or use Publish > Create App Packages, to produce
-  an MSIX from this manifest.
+  (WindowsPackageType=None, so F5 just works); scripts/package-msix.ps1 builds
+  and signs an MSIX from this manifest (docs/development.md, Packaging).
+
+  Publisher must match the signing certificate's subject (the dev certificate
+  the script creates is CN=Bridge Dev). Version is kept in step with
+  <Version> in Bridge.Windows.csproj and the Android versionName.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
-  <Identity Name="Bridge.App" Publisher="CN=Bridge" Version="0.1.0.0" />
+  IgnorableNamespaces="uap uap5 com desktop desktop2 rescap">
+  <Identity Name="Bridge.App" Publisher="CN=Bridge Dev" Version="0.2.0.0" />
   <Properties>
     <DisplayName>Bridge</DisplayName>
     <PublisherDisplayName>Bridge</PublisherDisplayName>
@@ -25,14 +32,46 @@
   </Resources>
   <Applications>
     <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
-      <uap:VisualElements DisplayName="Bridge" Description="Android ↔ Windows continuity" BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      <uap:VisualElements DisplayName="Bridge" Description="Your Android phone and this PC, connected over your own Wi-Fi."
+        BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" ShortName="Bridge">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
+      <Extensions>
+        <!-- Clicking a mirrored-notification toast (reply, buttons) activates Bridge through this COM class (Windows App SDK AppNotifications). -->
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="A4C606EA-B251-41B0-84DB-529668702E7B" />
+        </desktop:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="Bridge.Windows.exe" Arguments="----AppNotificationActivated:" DisplayName="Bridge notifications">
+              <com:Class Id="A4C606EA-B251-41B0-84DB-529668702E7B" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+        <!-- Settings › "Start Bridge when I sign in" (off until the user turns it on; StartupRegistration.TaskId). -->
+        <uap5:Extension Category="windows.startupTask" Executable="Bridge.Windows.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:StartupTask TaskId="BridgeStartup" Enabled="false" DisplayName="Bridge" />
+        </uap5:Extension>
+      </Extensions>
     </Application>
   </Applications>
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
     <Capability Name="privateNetworkClientServer" />
   </Capabilities>
+  <Extensions>
+    <!-- Lets phones reach Bridge on private networks only: pairing/sessions (TCP 47820) and discovery (UDP 47821). -->
+    <desktop2:Extension Category="windows.firewallRules">
+      <desktop2:FirewallRules Executable="Bridge.Windows.exe">
+        <desktop2:Rule Direction="in" IPProtocol="TCP" LocalPortMin="47820" LocalPortMax="47820" Profile="private" />
+        <desktop2:Rule Direction="in" IPProtocol="UDP" LocalPortMin="47821" LocalPortMax="47821" Profile="private" />
+      </desktop2:FirewallRules>
+    </desktop2:Extension>
+  </Extensions>
 </Package>

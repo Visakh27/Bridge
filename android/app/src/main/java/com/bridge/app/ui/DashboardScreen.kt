@@ -1,48 +1,37 @@
 package com.bridge.app.ui
 
-import android.content.ComponentName
 import android.content.Intent
-import android.provider.Settings
+import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import com.bridge.app.notifications.BridgeNotificationListener
+import androidx.core.content.FileProvider
+import com.bridge.app.network.TransferDirection
+import com.bridge.app.network.TransferEntry
+import com.bridge.app.network.TransferHistory
 import com.bridge.app.service.BridgeConnectionService
+import kotlinx.coroutines.delay
 
 /**
- * Section 4.2 (connected state): connection status, the clipboard sync
- * toggle, notification-mirroring access and per-app choices, and forgetting the PC. File sending
- * from Android happens via the share sheet (see MainActivity), not here.
+ * Section 4.2 (connected state): connection status (with why it isn't
+ * connected and "Try now"), sending a folder, and recent transfers with
+ * Retry / Open. Settings has the rest. Files are sent from other apps through
+ * the share sheet (MainActivity).
  */
 @Composable
-fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) {
+fun DashboardScreen(state: BridgeConnectionService.State, onSettings: () -> Unit) {
     val context = LocalContext.current
-    var clipboardSyncEnabled by remember { mutableStateOf(BridgeConnectionService.isClipboardSyncEnabled(context)) }
-    fun hasNotificationAccess() = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
-    var notificationAccess by remember { mutableStateOf(hasNotificationAccess()) }
-    // Re-check when the user comes back from the Settings screen.
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) notificationAccess = hasNotificationAccess()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    var confirmForget by remember { mutableStateOf(false) }
-    var showApps by remember { mutableStateOf(false) }
     // Android's share sheet can't share folders, so folders go through the system folder picker.
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -56,54 +45,19 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
         }
     }
 
-    if (showApps) {
-        NotificationAppsScreen(onBack = { showApps = false })
-        return
-    }
-
     Column(Modifier.fillMaxSize().padding(24.dp)) {
-        val pc = state.pcName ?: "your PC"
-        val title = when (state.status) {
-            BridgeConnectionService.Status.CONNECTED -> "Connected to $pc"
-            BridgeConnectionService.Status.CONNECTING -> "Connecting to $pc…"
-            else -> "Not connected"
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Bridge", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onSettings) { Text("Settings") }
         }
-        Text(title, style = MaterialTheme.typography.headlineSmall)
-        if (state.status == BridgeConnectionService.Status.CONNECTING) {
-            Spacer(Modifier.height(4.dp))
-            Text("Make sure Bridge is open on the PC and both devices are on the same Wi-Fi.", style = MaterialTheme.typography.bodySmall)
-        }
+        Spacer(Modifier.height(8.dp))
+        StatusCard(state)
+
         state.lastTransfer?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(Modifier.height(16.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Sync clipboard", modifier = Modifier.weight(1f))
-            Switch(checked = clipboardSyncEnabled, onCheckedChange = {
-                clipboardSyncEnabled = it
-                BridgeConnectionService.setClipboardSyncEnabled(context, it)
-            })
-        }
-        Text("Copies from your phone are sent while Bridge is open (an Android privacy rule).",
-            style = MaterialTheme.typography.bodySmall)
-
-        Spacer(Modifier.height(16.dp))
-        if (!notificationAccess) {
-            OutlinedButton(onClick = {
-                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                    putExtra(":settings:fragment_args_key",
-                        ComponentName(context, BridgeNotificationListener::class.java).flattenToString())
-                })
-            }) { Text("Show phone notifications on your PC") }
-        } else {
-            Text("Phone notifications are mirrored to your PC. Reply, dismiss or press their buttons there.",
-                style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = { showApps = true }) { Text("Choose apps") }
-        }
-
-        Spacer(Modifier.height(24.dp))
         Text("Share a file to Bridge from any app to send it to your PC.", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
@@ -111,17 +65,79 @@ fun DashboardScreen(state: BridgeConnectionService.State, onForget: () -> Unit) 
             onClick = { pickFolder.launch(null) },
         ) { Text("Send a folder") }
 
-        Spacer(Modifier.weight(1f))
-        TextButton(onClick = { confirmForget = true }) { Text("Forget this PC") }
+        Spacer(Modifier.height(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Recent transfers", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (state.recent.isNotEmpty()) TextButton(onClick = { BridgeConnectionService.clearRecent() }) { Text("Clear") }
+        }
+        if (state.recent.isEmpty()) {
+            Text("Files you send or receive appear here.", style = MaterialTheme.typography.bodySmall)
+        }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+            items(state.recent, key = { it.transferId + it.direction }) { entry ->
+                RecentRow(entry, connected = state.status == BridgeConnectionService.Status.CONNECTED)
+            }
+        }
     }
+}
 
-    if (confirmForget) {
-        AlertDialog(
-            onDismissRequest = { confirmForget = false },
-            title = { Text("Forget ${state.pcName ?: "this PC"}?") },
-            text = { Text("You'll need to scan a new code on the PC to connect again.") },
-            confirmButton = { TextButton(onClick = { confirmForget = false; onForget() }) { Text("Forget") } },
-            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Cancel") } },
-        )
+@Composable
+private fun StatusCard(state: BridgeConnectionService.State) {
+    val context = LocalContext.current
+    val pc = state.pcName ?: "your PC"
+    // Ticks once a second while a retry is scheduled, for the countdown.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.nextRetryAt) {
+        while (state.nextRetryAt != null) { now = System.currentTimeMillis(); delay(1000) }
+    }
+    val title = when (state.status) {
+        BridgeConnectionService.Status.CONNECTED -> "Connected to $pc"
+        BridgeConnectionService.Status.CONNECTING -> if (state.nextRetryAt != null) "Not connected to $pc" else "Connecting to $pc…"
+        else -> "Not connected"
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            if (state.status != BridgeConnectionService.Status.CONNECTED) {
+                state.lastError?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                val wait = state.nextRetryAt?.let { ((it - now) / 1000).coerceAtLeast(0) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (wait != null) "Trying again in $wait s" else "Make sure Bridge is open on the PC and both are on the same Wi-Fi.",
+                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { BridgeConnectionService.tryNow(context) }) { Text("Try now") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentRow(entry: TransferEntry, connected: Boolean) {
+    val context = LocalContext.current
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            val arrow = if (entry.direction == TransferDirection.SENDING) "↑" else "↓"
+            val name = entry.folder?.let { "$it › ${entry.fileName}" } ?: entry.fileName
+            Text("$arrow $name", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(TransferHistory.describe(entry), style = MaterialTheme.typography.bodySmall)
+        }
+        if (entry.canRetry) {
+            TextButton(enabled = connected, onClick = {
+                if (!BridgeConnectionService.retry(entry))
+                    Toast.makeText(context, "Couldn't retry: is Bridge connected to your PC?", Toast.LENGTH_LONG).show()
+            }) { Text("Retry") }
+        }
+        if (entry.canOpen) {
+            TextButton(onClick = {
+                val file = entry.savedFile ?: return@TextButton
+                runCatching {
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                    val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.onFailure { Toast.makeText(context, "No app here can open this file.", Toast.LENGTH_LONG).show() }
+            }) { Text("Open") }
+        }
     }
 }

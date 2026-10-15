@@ -70,8 +70,20 @@
    treated as untrusted (control and bidi-override characters removed, lengths
    capped), and toast arguments are encoded so no notification content can
    change what a click does.
-11. **Logging** — diagnostic logs record connection/transfer *metadata*
-   (timestamps, byte counts, error codes) and never message payload contents.
+11. **Diagnostics log** — metadata only, enforced by construction: events
+   take typed fields (numbers, flags, short code words such as a status or an
+   exception type name, and ids as a salted 8-character hash that changes every
+   run), so file names, folder names, clipboard text, notification text,
+   device names, addresses, keys and tokens can't be written. Kept on the
+   device (Windows: `%LOCALAPPDATA%\Bridge\logs`; Android: app-private
+   storage), at most 3 × 256 KB, deleted after 14 days, and only leaves the
+   device if the user saves or shares a report. Turning diagnostics off in
+   Settings deletes the log. Tests check real sessions on both platforms for
+   leaks.
+12. **Retry copies** — a file shared from another Android app is copied into
+   Bridge's private cache to send it. If the send fails, the copy is kept (at
+   most 24 h, or until "Clear" in Recent transfers) so it can be retried;
+   a cancelled send's copy is deleted at once.
 
 ## Known limits (MVP)
 

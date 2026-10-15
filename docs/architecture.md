@@ -47,6 +47,16 @@ Bridge.Security ────────┤    platform)         ├────
   what a toast button carries. Bridge.Windows only builds toasts and forwards
   clicks.
 
+- **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
+  `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
+  `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and
+  `TransferHistory` (Recent transfers, Retry/Open); Bridge.Windows adds the
+  first-run guide, the Settings panel, start-at-sign-in (`StartupRegistration`:
+  Run key unpackaged, StartupTask in MSIX) and a single-instance entry point
+  (`Program`). Android: `core/DiagnosticsLog` + `PhoneDiagnostics`,
+  `network/TransferHistory`, `BridgePrefs`, and the Onboarding/Settings
+  screens. The log, report and history are plain code tested on both sides.
+
 ## Error codes
 
 `CONNECTION_TIMEOUT`, `AUTH_FAILED`, `DEVICE_UNPAIRED`, `TRANSFER_INTERRUPTED`,
