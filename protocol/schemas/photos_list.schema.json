@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PhotosListPayload",
+  "description": "PC -> phone: newest photos first, older than cursor 'before' (from the previous page).",
+  "type": "object",
+  "required": [
+    "requestId",
+    "limit"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "before": {
+      "type": "string",
+      "pattern": "^[0-9]{1,15}:[0-9]{1,19}$"
+    }
+  }
+}

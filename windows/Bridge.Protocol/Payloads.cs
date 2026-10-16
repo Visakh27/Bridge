@@ -102,3 +102,53 @@ public static class NotificationActionStatus
     /// <summary>Local only (never on the wire): no answer, or no connected phone that supports actions.</summary>
     public const string Unavailable = "unavailable";
 }
+
+/// <summary>One photo on the phone. <see cref="Id"/> is the phone's library id (digits); <see cref="TakenAt"/> is epoch ms.</summary>
+public sealed record PhotoInfo(string Id, string Name, long TakenAt, int Width, int Height, long Size, string Mime);
+
+/// <summary>PC → phone: newest photos first, up to <see cref="Limit"/> (≤ 100), older than cursor <see cref="Before"/>.</summary>
+public sealed record PhotosListPayload(string RequestId, int Limit)
+{
+    public string? Before { get; init; }
+}
+
+/// <summary>Phone → PC: a page of <see cref="PhotosListPayload"/>; <see cref="Next"/> is the cursor for the next page (absent at the end).</summary>
+public sealed record PhotosPagePayload(string RequestId, string Status, PhotoInfo[] Items)
+{
+    public string? Next { get; init; }
+}
+
+/// <summary>PC → phone: a small JPEG preview of photo <see cref="Id"/>.</summary>
+public sealed record PhotosThumbPayload(string RequestId, string Id);
+
+/// <summary>Phone → PC: the preview (base64 JPEG, at most 320 px on its long side) or why not.</summary>
+public sealed record PhotosThumbnailPayload(string RequestId, string Id, string Status)
+{
+    public string? Mime { get; init; }
+    public string? Data { get; init; }
+}
+
+/// <summary>PC → phone: send the original of photo <see cref="Id"/> (it arrives as a normal file transfer).</summary>
+public sealed record PhotosFetchPayload(string RequestId, string Id);
+
+/// <summary>Phone → PC: the fetch was accepted (<see cref="TransferId"/> is the file transfer that follows) or why not.</summary>
+public sealed record PhotosFetchedPayload(string RequestId, string Id, string Status)
+{
+    public string? TransferId { get; init; }
+}
+
+public static class PhotoStatus
+{
+    public const string Ok = "ok";
+    /// <summary>The user hasn't turned on "Let your PC browse photos" on the phone.</summary>
+    public const string Disabled = "disabled";
+    /// <summary>Android hasn't given Bridge access to photos.</summary>
+    public const string NoPermission = "no_permission";
+    public const string NotFound = "not_found";
+    /// <summary>Too many requests waiting; ask again shortly.</summary>
+    public const string Busy = "busy";
+    public const string Invalid = "invalid";
+    public const string Error = "error";
+    /// <summary>Local only (never on the wire): no answer, or no connected phone with photos.</summary>
+    public const string Unavailable = "unavailable";
+}

@@ -37,6 +37,8 @@ public sealed class BridgeSession : IAsyncDisposable
     public ConnectedDevice Device { get; }
     public event Action<NotificationPostPayload>? NotificationReceived;
     public event Action<string>? NotificationDismissed; // notification key
+    /// <summary>photos.page / photos.thumbnail / photos.fetched / photos.changed from the phone (see <see cref="PhotoBrowser"/>).</summary>
+    public event Action<BridgeMessage>? PhotosMessage;
     public event Action<ConnectedDevice>? StatusChanged;
     public event Action<ErrorPayload>? PeerError;
     /// <summary>Diagnostics: a handler threw for a message of this type (payload contents are never included).</summary>
@@ -94,6 +96,9 @@ public sealed class BridgeSession : IAsyncDisposable
         _fileTransfer.SendFolderAsync(_channel, path, SendOptions, ct);
 
     public Task SendAsync(BridgeMessage message, CancellationToken ct = default) => _channel.SendAsync(message, ct);
+
+    /// <summary>The phone lets this PC browse its photos (it may still answer "disabled" until the user turns it on).</summary>
+    public bool SupportsPhotos => Device.PeerFeatures.Contains(Features.Photos);
 
     /// <summary>The phone can carry out replies, button presses, dismissals and mutes.</summary>
     public bool SupportsNotificationActions => Device.PeerFeatures.Contains(Features.NotificationsActions);
@@ -208,6 +213,12 @@ public sealed class BridgeSession : IAsyncDisposable
             case MessageType.NotificationDismiss:
                 if (message.PayloadAs<NotificationDismissPayload>().Key is { Length: > 0 } dismissedKey)
                     NotificationDismissed?.Invoke(dismissedKey);
+                break;
+            case MessageType.PhotosPage:
+            case MessageType.PhotosThumbnail:
+            case MessageType.PhotosFetched:
+            case MessageType.PhotosChanged:
+                PhotosMessage?.Invoke(message);
                 break;
             case MessageType.NotificationActionResult:
                 var result = message.PayloadAs<NotificationActionResultPayload>();

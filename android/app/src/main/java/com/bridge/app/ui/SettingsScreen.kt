@@ -27,6 +27,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.bridge.app.core.BridgePrefs
 import com.bridge.app.notifications.BridgeNotificationListener
+import com.bridge.app.photos.MediaStorePhotoLibrary
 import com.bridge.app.service.BridgeConnectionService
 
 /** Settings: clipboard, notifications on the PC, diagnostics, about, forget the PC. */
@@ -41,13 +42,21 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     var access by remember { mutableStateOf(listenerAccess()) }
     var canPost by remember { mutableStateOf(postAllowed()) }
+    var photos by remember { mutableStateOf(BridgePrefs.photosEnabled(context)) }
+    var photoAccess by remember { mutableStateOf(MediaStorePhotoLibrary.hasPermission(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) { access = listenerAccess(); canPost = postAllowed() } }
+        val observer = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) { access = listenerAccess(); canPost = postAllowed(); photoAccess = MediaStorePhotoLibrary.hasPermission(context) }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val askPost = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { canPost = it }
+    val askPhotos = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        photoAccess = MediaStorePhotoLibrary.hasPermission(context)
+        BridgeConnectionService.photosSettingChanged(context)
+    }
     var confirmForget by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
@@ -78,6 +87,25 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
             TextButton(onClick = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) askPost.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
                 Text("Allow Bridge notifications")
             }
+        }
+
+        Section("Photos on your PC")
+        SwitchRow("Let your PC browse photos",
+            "Your PC can show this phone's photos and save copies. It sees only what Android lets Bridge see, and only while this is on.",
+            photos) {
+            photos = it
+            BridgePrefs.setPhotosEnabled(context, it)
+            BridgeConnectionService.photosSettingChanged(context)
+            if (it && !photoAccess) askPhotos.launch(MediaStorePhotoLibrary.permissions())
+        }
+        if (photos && !photoAccess) {
+            Text("Bridge doesn't have access to your photos yet.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { askPhotos.launch(MediaStorePhotoLibrary.permissions()) }) { Text("Allow photo access") }
+        } else if (photos && Build.VERSION.SDK_INT >= 34 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+            // Android 14 "selected photos" access: the PC sees just those.
+            Text("Your PC sees only the photos you selected.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { askPhotos.launch(MediaStorePhotoLibrary.permissions()) }) { Text("Change selection") }
         }
 
         Section("Diagnostics")

@@ -21,5 +21,12 @@ object MessageType {
     const val NOTIFICATION_ACTION = "notification.action"
     const val NOTIFICATION_ACTION_RESULT = "notification.action.result"
     const val NOTIFICATION_MUTE = "notification.mute"
+    const val PHOTOS_LIST = "photos.list"
+    const val PHOTOS_PAGE = "photos.page"
+    const val PHOTOS_THUMB = "photos.thumb"
+    const val PHOTOS_THUMBNAIL = "photos.thumbnail"
+    const val PHOTOS_FETCH = "photos.fetch"
+    const val PHOTOS_FETCHED = "photos.fetched"
+    const val PHOTOS_CHANGED = "photos.changed"
     const val ERROR = "error"
 }

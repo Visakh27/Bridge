@@ -36,6 +36,13 @@
         "notification.action",
         "notification.action.result",
         "notification.mute",
+        "photos.list",
+        "photos.page",
+        "photos.thumb",
+        "photos.thumbnail",
+        "photos.fetch",
+        "photos.fetched",
+        "photos.changed",
         "error"
       ]
     },

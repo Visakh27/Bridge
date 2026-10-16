@@ -63,6 +63,7 @@ class BridgeConnectionService : Service() {
     private lateinit var fileTransfer: FileTransferClient
     private lateinit var clipboardSync: ClipboardSyncClient
     private val diagnostics get() = (application as BridgeApplication).diagnostics
+    private var photoObserver: android.database.ContentObserver? = null
     /** Notification posts/dismissals go out one at a time, in order (a dismiss never overtakes its post). */
     private val notificationQueue = Channel<Pair<BridgeClientSession, BridgeMessage>>(256, BufferOverflow.DROP_OLDEST)
 
@@ -112,6 +113,7 @@ class BridgeConnectionService : Service() {
                 LogField.num("sdk", Build.VERSION.SDK_INT),
                 LogField.code("status", st.status.name),
                 LogField.flag("clipboard_sync", isClipboardSyncEnabled(context)),
+                LogField.flag("photos_enabled", com.bridge.app.core.BridgePrefs.photosEnabled(context)),
                 LogField.flag("notification_access", androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)),
                 LogField.num("apps_turned_off", app.notificationMirror.filter.snapshot.decisions.count { !it.value }.toLong()))
             val dir = File(context.cacheDir, "reports").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
@@ -158,6 +160,12 @@ class BridgeConnectionService : Service() {
             dismissals.forEach { service.queueNotificationMessage(s, BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, it)) }
         }
 
+        /** Photos were turned on/off or access changed: the PC refreshes its Photos view. */
+        fun photosSettingChanged(context: Context) {
+            val app = context.applicationContext as BridgeApplication
+            app.photoService.settingChanged { message -> instance?.session?.takeIf { it.peerSupports(Features.PHOTOS) }?.send(message) }
+        }
+
         /** Forgets the paired PC on this phone and stops connecting to it. */
         suspend fun forgetPc(context: Context) {
             val store = SharedPrefsPairedDeviceStore(context)
@@ -181,6 +189,15 @@ class BridgeConnectionService : Service() {
         clipboardSync = ClipboardSyncClient(AndroidClipboardAccess(this), scope).apply {
             enabled = isClipboardSyncEnabled(this@BridgeConnectionService)
         }
+        // New or deleted photos: tell the PC (debounced) so its Photos view refreshes.
+        photoObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                (application as BridgeApplication).photoService.libraryChanged { message ->
+                    session?.takeIf { it.peerSupports(Features.PHOTOS) }?.send(message)
+                }
+            }
+        }
+        runCatching { contentResolver.registerContentObserver(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, photoObserver!!) }
         scope.launch {
             val mirror = (application as BridgeApplication).notificationMirror
             for ((s, message) in notificationQueue) {
@@ -232,6 +249,7 @@ class BridgeConnectionService : Service() {
                     },
                     statusProvider = ::currentStatus,
                     notifications = app.notificationMirror,
+                    photos = app.photoService,
                 ).also { session = it }
             },
             listener = object : ReconnectLoop.Listener {
@@ -379,6 +397,7 @@ class BridgeConnectionService : Service() {
         instance = null
         network.stop()
         fileTransfer.state.close() // write any pending resume state
+        photoObserver?.let { runCatching { contentResolver.unregisterContentObserver(it) } }
         notificationQueue.close()
         scope.cancel()
         session?.close()

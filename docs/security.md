@@ -80,7 +80,17 @@
    device if the user saves or shares a report. Turning diagnostics off in
    Settings deletes the log. Tests check real sessions on both platforms for
    leaks.
-12. **Retry copies** — a file shared from another Android app is copied into
+12. **Photos** — off until the user turns on "Let your PC browse photos" on
+   the phone; then the paired PC can list photos, get small previews and
+   fetch originals, nothing else. Requests name photos only by MediaStore id
+   (digits), never by path, and go through Android's photo permission, so the
+   PC sees exactly what Android lets Bridge see (on Android 14 "selected
+   photos", just those). Turning it off answers every request `disabled` at
+   once. Originals travel as normal encrypted, hash-checked transfers; the
+   phone's temporary copy is deleted once delivered. On the PC, previews are
+   accepted only as small JPEGs and photo names are cleaned like any received
+   file name. Logs record request kinds and outcomes, never ids or names.
+13. **Retry copies** — a file shared from another Android app is copied into
    Bridge's private cache to send it. If the send fails, the copy is kept (at
    most 24 h, or until "Clear" in Recent transfers) so it can be retried;
    a cancelled send's copy is deleted at once.

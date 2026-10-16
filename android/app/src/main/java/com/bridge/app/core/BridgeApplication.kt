@@ -14,6 +14,24 @@ class BridgeApplication : Application() {
     lateinit var identity: DeviceIdentity
         private set
 
+    /** Work that outlives a single connection (photo requests). */
+    val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+    /** Answers the PC's photo requests once the user turns photos on (Settings). */
+    val photoService: com.bridge.app.photos.PhotoService by lazy {
+        com.bridge.app.photos.PhotoService(
+            com.bridge.app.photos.MediaStorePhotoLibrary(this, java.io.File(cacheDir, "share")), // swept like share copies
+            enabled = { BridgePrefs.photosEnabled(this) },
+            scope = appScope,
+        ).also {
+            it.onRequestHandled = { kind, status ->
+                // The PC loads dozens of previews at once: log those only when they fail.
+                if (!(kind == "thumb" && status == com.bridge.app.protocol.PhotoStatus.OK))
+                    diagnostics.info("photos.request", LogField.code("kind", kind), LogField.code("status", status))
+            }
+        }
+    }
+
     /** Metadata-only diagnostics log (Settings › Diagnostics). */
     val diagnostics: DiagnosticsLog by lazy {
         DiagnosticsLog(java.io.File(filesDir, "logs")).also { it.enabled = BridgePrefs.diagnosticsEnabled(this) }
