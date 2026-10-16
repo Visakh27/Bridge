@@ -10,43 +10,124 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12">
-            <TextBlock Text="Bridge" FontSize="28" FontWeight="SemiBold" />
-            <TextBlock x:Name="StatusText" Text="Not paired" VerticalAlignment="Center" Opacity="0.7" />
-        </StackPanel>
+        <!-- Header -->
+        <Grid Grid.Row="0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Image Grid.Column="0" Source="Assets/Square44x44Logo.png" Width="32" Height="32" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="Bridge" FontSize="28" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" x:Name="StatusText" Text="Not paired" VerticalAlignment="Center" Opacity="0.7"
+                       TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="3" x:Name="SettingsButton" Content="Settings" Click="OnSettingsClicked" />
+        </Grid>
 
-        <Grid Grid.Row="1" ColumnSpacing="24">
+        <!-- First run -->
+        <ScrollViewer Grid.Row="1" x:Name="OnboardingPanel" Visibility="Collapsed">
+            <StackPanel Spacing="16" MaxWidth="560" HorizontalAlignment="Left">
+                <TextBlock Text="Welcome to Bridge" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock TextWrapping="Wrap" Opacity="0.85"
+                           Text="Bridge connects your Android phone and this PC over your own Wi-Fi: send files and folders both ways, share the clipboard, and see and answer your phone's notifications here. Nothing goes through the internet." />
+                <TextBlock Text="To get started" FontWeight="SemiBold" />
+                <TextBlock TextWrapping="Wrap" Text="1.  Install the Bridge app on your Android phone." />
+                <TextBlock TextWrapping="Wrap" Text="2.  Put the phone and this PC on the same Wi-Fi network. If Windows asks, allow Bridge on private networks (it isn't used on public ones)." />
+                <TextBlock TextWrapping="Wrap" Text="3.  Open Bridge on the phone and scan the code shown on the next screen." />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="Closing the window keeps Bridge running in the system tray, so your phone stays connected. You can change this and more in Settings." />
+                <Button Content="Get started" Style="{StaticResource AccentButtonStyle}" Click="OnOnboardingDoneClicked" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Main: pairing or connected phone on the left, sending + recent transfers on the right -->
+        <Grid Grid.Row="1" x:Name="MainPanel" ColumnSpacing="24">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Pairing panel: shown while no phone is connected -->
             <StackPanel x:Name="PairingPanel" Grid.Column="0" Spacing="12" HorizontalAlignment="Center">
                 <TextBlock Text="Scan with the Bridge Android app" HorizontalAlignment="Center" TextWrapping="Wrap" />
                 <Image x:Name="QrImage" Width="220" Height="220" />
                 <TextBlock x:Name="QrInfoText" HorizontalAlignment="Center" TextWrapping="Wrap" FontSize="12" Opacity="0.6" />
-                <Button Content="Regenerate code" Click="OnRegenerateQrClicked" HorizontalAlignment="Center" />
+                <Button x:Name="RegenerateButton" Content="New code" Click="OnRegenerateQrClicked" HorizontalAlignment="Center" />
             </StackPanel>
 
-            <!-- Dashboard: device info + drag/drop file target -->
-            <StackPanel x:Name="DashboardPanel" Grid.Column="1" Spacing="12" Visibility="Collapsed">
-                <TextBlock x:Name="DeviceNameText" FontSize="20" FontWeight="SemiBold" />
+            <StackPanel x:Name="DevicePanel" Grid.Column="0" Spacing="12" Visibility="Collapsed">
+                <TextBlock x:Name="DeviceNameText" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBlock x:Name="BatteryText" Opacity="0.8" />
-                <Border AllowDrop="True" Background="{ThemeResource ControlFillColorDefaultBrush}"
-                        CornerRadius="8" Height="180" Drop="OnFileDrop" DragOver="OnDragOver">
-                    <TextBlock Text="Drop files or folders here to send to your phone"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7" />
-                </Border>
-                <ProgressBar x:Name="TransferProgressBar" Minimum="0" Maximum="1" Visibility="Collapsed" />
-                <TextBlock x:Name="TransferText" Opacity="0.8" TextWrapping="Wrap" />
                 <ToggleSwitch x:Name="ClipboardToggle" Header="Sync clipboard" Toggled="OnClipboardToggled" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="Open received files" Click="OnOpenReceivedClicked" />
-                    <Button Content="Forget this phone" Click="OnForgetClicked" />
-                </StackPanel>
+                <Button Content="Open received files" Click="OnOpenReceivedClicked" />
+                <Button Content="Forget this phone" Click="OnForgetClicked" />
             </StackPanel>
+
+            <Grid Grid.Column="1" RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" x:Name="DropZone" AllowDrop="True" Background="{ThemeResource ControlFillColorDefaultBrush}"
+                        CornerRadius="8" Height="140" Drop="OnFileDrop" DragOver="OnDragOver">
+                    <TextBlock x:Name="DropZoneText" Text="Connect your phone to send files"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" TextAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Row="1" Spacing="4">
+                    <ProgressBar x:Name="TransferProgressBar" Minimum="0" Maximum="1" Visibility="Collapsed" />
+                    <TextBlock x:Name="TransferText" Opacity="0.8" TextWrapping="Wrap" />
+                </StackPanel>
+                <Grid Grid.Row="2">
+                    <TextBlock Text="Recent transfers" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <HyperlinkButton x:Name="ClearRecentButton" Content="Clear" HorizontalAlignment="Right" Click="OnClearRecentClicked" />
+                </Grid>
+                <ScrollViewer Grid.Row="3">
+                    <StackPanel x:Name="RecentPanel" Spacing="6">
+                        <TextBlock x:Name="RecentEmptyText" Text="Files you send or receive appear here." Opacity="0.6" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
         </Grid>
+
+        <!-- Settings -->
+        <ScrollViewer Grid.Row="1" x:Name="SettingsPanel" Visibility="Collapsed">
+            <StackPanel Spacing="12" MaxWidth="560" HorizontalAlignment="Left">
+                <TextBlock Text="Settings" FontSize="22" FontWeight="SemiBold" />
+
+                <TextBlock Text="Received files" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <TextBlock x:Name="DownloadFolderText" TextWrapping="Wrap" Opacity="0.8" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Change folder…" Click="OnChangeFolderClicked" />
+                    <Button x:Name="ResetFolderButton" Content="Use Downloads\Bridge" Click="OnResetFolderClicked" />
+                </StackPanel>
+
+                <TextBlock Text="Starting Bridge" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="StartWithWindowsToggle" Header="Start Bridge when I sign in to Windows" Toggled="OnSettingToggled" />
+                <ToggleSwitch x:Name="StartMinimizedToggle" Header="Start in the system tray, without opening the window" Toggled="OnSettingToggled" />
+
+                <TextBlock Text="Phone notifications" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="ShowNotificationsToggle" Header="Show my phone's notifications on this PC" Toggled="OnSettingToggled" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="Choose which apps appear here in the Bridge app on your phone (Settings › Choose apps)." />
+
+                <TextBlock Text="Diagnostics" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="DiagnosticsToggle" Header="Keep a diagnostics log" Toggled="OnSettingToggled" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="Records connection and transfer events (times, sizes, error types) to help fix problems. Never file names, messages, clipboard text or keys. Stays on this PC unless you share the report." />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="SaveReportButton" Content="Save diagnostics report" Click="OnSaveReportClicked" />
+                    <Button Content="Open log folder" Click="OnOpenLogFolderClicked" />
+                </StackPanel>
+
+                <TextBlock Text="About" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <TextBlock x:Name="VersionText" Opacity="0.8" />
+                <TextBlock x:Name="SettingsMessageText" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+
+                <Button Content="Done" Style="{StaticResource AccentButtonStyle}" Click="OnSettingsDoneClicked" Margin="0,8,0,0" />
+            </StackPanel>
+        </ScrollViewer>
 
         <TextBlock Grid.Row="2" x:Name="FooterText" Opacity="0.5" FontSize="12"
                     Text="Closing this window keeps Bridge running in the system tray." />

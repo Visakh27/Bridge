@@ -3,6 +3,7 @@ using H.NotifyIcon;
 using Microsoft.UI;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Bridge.Windows;
 
@@ -10,7 +11,7 @@ namespace Bridge.Windows;
 /// System-tray presence (section 4.2 / 26): keeps Bridge reachable after the
 /// window is closed. Built in code rather than XAML and driven by commands,
 /// because H.NotifyIcon's default native popup menu only invokes Command, not
-/// Click handlers. Generated icon until real branding assets exist.
+/// Click handlers. Uses Assets/Bridge.ico; falls back to a generated "B" if it can't be loaded.
 /// </summary>
 public sealed class TrayIcon : IDisposable
 {
@@ -26,16 +27,23 @@ public sealed class TrayIcon : IDisposable
         _icon = new TaskbarIcon
         {
             ToolTipText = "Bridge",
-            IconSource = new GeneratedIconSource
-            {
-                Text = "B",
-                Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 0, 120, 212)),
-            },
+            IconSource = LoadIcon(),
             ContextFlyout = menu,
             LeftClickCommand = openCommand,
             NoLeftClickDelay = true,
         };
         _icon.ForceCreate();
+    }
+
+    private static ImageSource LoadIcon()
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(AppContext.BaseDirectory, "Assets", "Bridge.ico")))
+                return new BitmapImage(new Uri("ms-appx:///Assets/Bridge.ico"));
+        }
+        catch (Exception) { }
+        return new GeneratedIconSource { Text = "B", Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 0, 120, 212)) };
     }
 
     public void Dispose() => _icon.Dispose();

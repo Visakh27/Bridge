@@ -38,6 +38,10 @@ data class TransferProgress(
     val batchCount: Int? = null,
     /** Chunk the transfer (re)started from: > 0 when it was resumed. */
     val resumedFrom: Int = 0,
+    /** Sending: the local file being sent (for "Retry"). */
+    val sourceFile: File? = null,
+    /** Sending: a failed send's private copy was kept so it can be retried (see [FileTransferClient.retainFailedCopies]). */
+    val retainedCopy: Boolean = false,
 ) {
     val fraction: Double
         get() = if (totalChunks == 0) (if (status == TransferStatus.COMPLETED) 1.0 else 0.0) else chunksDone.toDouble() / totalChunks
@@ -76,6 +80,21 @@ class FileTransferClient(
         /** Abandoned resumable partials kept per peer; older ones are evicted. */
         const val MAX_PARTIALS_PER_PEER = 32
         const val RESUME_REPLY_TIMEOUT_MS = 30_000L
+
+        /** How long a failed send's private copy is kept for "Retry". */
+        const val RETAINED_COPY_MS = 24L * 60 * 60 * 1000
+
+        /**
+         * Deletes private copies in [dir] older than [maxAgeMs] that no queued send needs
+         * ([inUse] = [TransferStateStore.pendingPaths]). Call at startup.
+         */
+        fun sweepStaleCopies(dir: File, inUse: Set<String>, maxAgeMs: Long = RETAINED_COPY_MS, now: Long = System.currentTimeMillis()): Int {
+            var n = 0
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.path !in inUse && now - f.lastModified() > maxAgeMs && f.delete()) n++
+            }
+            return n
+        }
 
         /** 60 s plus the time to hash the file at a slow 50 MB/s. */
         fun finalAckTimeoutMs(size: Long): Long = 60_000L + size * 1000 / (50L * 1024 * 1024)
@@ -120,6 +139,9 @@ class FileTransferClient(
     }
 
     /** An outgoing transfer, kept from file.start until the receiver's file.ack. */
+    /** Keep a failed send's private copy (deleteWhenDone) for "Retry" instead of deleting it. */
+    @Volatile var retainFailedCopies: Boolean = false
+
     private class Outgoing(val channel: EncryptedChannel, @Volatile var progress: TransferProgress) {
         val resumeReply = CompletableDeferred<Int>()    // file.resume nextIndex; −1 = receiver already has it
         val finalAck = CompletableDeferred<String>()    // file.ack after file.end (resumable)
@@ -207,7 +229,7 @@ class FileTransferClient(
         val resumable = options.peerSupportsResume
         val id = entry.transferId
         val file = File(entry.filePath)
-        val o = Outgoing(channel, TransferProgress(id, entry.fileName, TransferDirection.SENDING,
+        val o = Outgoing(channel, TransferProgress(id, entry.fileName, TransferDirection.SENDING, sourceFile = file,
             relativePath = entry.relativePath, batchId = entry.batchId, batchIndex = entry.batchIndex, batchCount = entry.batchCount))
         outgoing[id] = o
         if (resumable) state.addOutbox(entry)
@@ -307,8 +329,13 @@ class FileTransferClient(
                 state.removeOutbox(id)
             }
         }
-        // A private copy is kept only while an interrupted send waits in the outbox.
-        if (entry.deleteWhenDone && !(resumable && o.progress.status == TransferStatus.INTERRUPTED)) file.delete()
+        // A private copy is kept while an interrupted send waits in the outbox, and (with
+        // retainFailedCopies) after a failure, so "Retry" can send it again; sweepStaleCopies
+        // removes forgotten ones. Folder files aren't retried one by one.
+        val keepForRetry = retainFailedCopies && entry.deleteWhenDone && entry.batchId == null &&
+            (o.progress.status == TransferStatus.FAILED || (o.progress.status == TransferStatus.CANCELLED && !o.userCancelled))
+        if (keepForRetry) o.progress = o.progress.copy(retainedCopy = true)
+        else if (entry.deleteWhenDone && !(resumable && o.progress.status == TransferStatus.INTERRUPTED)) file.delete()
         onProgress(o.progress)
         return o.progress
     }

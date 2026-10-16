@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shareable: the diagnostics report (Settings › Share diagnostics report) and received
+     files, so "Open" in Recent transfers can hand them to a viewer app. -->
+<paths>
+    <cache-path name="reports" path="reports/" />
+    <external-files-path name="received" path="Bridge/" />
+    <files-path name="received_internal" path="Bridge/" />
+</paths>

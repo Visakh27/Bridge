@@ -71,6 +71,9 @@ class TransferStateStore(directory: File? = null, private val now: () -> Long = 
 
     fun pendingFor(peerId: String): List<OutboxEntry> = synchronized(lock) { prune(); state.outbox.filter { it.peerId == peerId } }
 
+    /** Files any queued send still needs (so cleanup leaves them alone). */
+    fun pendingPaths(): Set<String> = synchronized(lock) { prune(); state.outbox.map { it.filePath }.toSet() }
+
     fun addOutbox(entry: OutboxEntry) = synchronized(lock) {
         state.outbox.removeAll { it.transferId == entry.transferId }
         state.outbox += entry

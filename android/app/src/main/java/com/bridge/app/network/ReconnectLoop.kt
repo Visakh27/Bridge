@@ -37,6 +37,10 @@ class ReconnectLoop(
         fun onConnecting(pc: PairedDevice) {}
         fun onAddressChanged(pc: PairedDevice) {}
         fun onUnpaired(pc: PairedDevice) {}
+        /** A connection attempt failed (unreachable, timed out, wrong machine…) or a session ended with an error. */
+        fun onAttemptFailed(pc: PairedDevice, error: Exception) {}
+        /** The next attempt is in [delayMs] unless [wake] is called first ("Try now"). */
+        fun onRetryScheduled(delayMs: Long) {}
     }
 
     enum class Outcome { NOT_PAIRED, UNPAIRED }
@@ -69,6 +73,7 @@ class ReconnectLoop(
                 listener.onUnpaired(pc)
                 return Outcome.UNPAIRED
             } catch (e: Exception) {
+                listener.onAttemptFailed(pc, e)
                 // Unreachable / timed out (IOException) or someone else answered at that
                 // address (AuthenticationException): the PC may have moved. Look for it.
                 // At most one immediate retry per failure: a PC answering from two
@@ -90,6 +95,7 @@ class ReconnectLoop(
             if (retryNow) continue
             val wait = backoffMs[minOf(attempt, backoffMs.size - 1)]
             attempt++
+            listener.onRetryScheduled(wait)
             withTimeoutOrNull(wait) { wakeSignal.receive() } // a network change cuts the wait short
         }
         throw CancellationException()

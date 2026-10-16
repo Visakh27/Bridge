@@ -21,7 +21,7 @@ public sealed class BridgeSession : IAsyncDisposable
     private readonly EncryptedChannel _channel;
     private readonly FileTransferService _fileTransfer;
     private readonly ClipboardSyncService _clipboard;
-    private readonly string _downloadDir;
+    private readonly Func<string> _downloadDir;
     private readonly CancellationTokenSource _cts = new();
     private readonly TimeSpan _pingInterval;
     private readonly TimeSpan _peerTimeout;
@@ -46,6 +46,11 @@ public sealed class BridgeSession : IAsyncDisposable
 
     public BridgeSession(EncryptedChannel channel, ConnectedDevice device, FileTransferService fileTransfer,
         ClipboardSyncService clipboard, string downloadDir, TimeSpan? pingInterval = null, TimeSpan? peerTimeout = null)
+        : this(channel, device, fileTransfer, clipboard, () => downloadDir, pingInterval, peerTimeout) { }
+
+    /// <param name="downloadDir">Read for each incoming file, so a changed download folder applies at once.</param>
+    public BridgeSession(EncryptedChannel channel, ConnectedDevice device, FileTransferService fileTransfer,
+        ClipboardSyncService clipboard, Func<string> downloadDir, TimeSpan? pingInterval = null, TimeSpan? peerTimeout = null)
     {
         _channel = channel;
         Device = device;
@@ -69,7 +74,7 @@ public sealed class BridgeSession : IAsyncDisposable
         StatusChanged?.Invoke(Device);
 
         // Pick up where interrupted transfers left off (and tidy partials nobody came back for).
-        FileTransferService.CleanupExpiredPartials(_downloadDir);
+        FileTransferService.CleanupExpiredPartials(_downloadDir());
         _resumeLoop = Task.Run(async () =>
         {
             try { await _fileTransfer.ResumePendingAsync(_channel, SendOptions, _cts.Token); }
@@ -187,7 +192,7 @@ public sealed class BridgeSession : IAsyncDisposable
             case MessageType.FileCancel:
             case MessageType.FileAck:
             case MessageType.FileResume:
-                await _fileTransfer.HandleIncomingAsync(_channel, message, _downloadDir, ct);
+                await _fileTransfer.HandleIncomingAsync(_channel, message, _downloadDir(), ct);
                 break;
             case MessageType.DeviceStatus:
                 var status = message.PayloadAs<DeviceStatusPayload>();

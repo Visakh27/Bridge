@@ -90,6 +90,9 @@ class NotificationMirror(
         }
     }
 
+    /** Diagnostics: (kind, status) after each PC request — never keys or contents. */
+    @Volatile var onRequestHandled: ((kind: String, status: String) -> Unit)? = null
+
     /** Last payload sent per key, to skip updates that change nothing visible. */
     private val lastSent = object : LinkedHashMap<String, NotificationPostPayload>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, NotificationPostPayload>?) = size > MAX_TRACKED
@@ -180,6 +183,7 @@ class NotificationMirror(
             MessageType.NOTIFICATION_ACTION -> {
                 val request = message.payloadAs<NotificationActionPayload>()
                 val status = perform(request)
+                onRequestHandled?.invoke(if (request.replyText != null) "reply" else "press", status)
                 reply(BridgeMessage.create(MessageType.NOTIFICATION_ACTION_RESULT, NotificationActionResultPayload(request.requestId, status)))
             }
             MessageType.NOTIFICATION_DISMISS -> {
@@ -191,11 +195,17 @@ class NotificationMirror(
                     reply(BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, NotificationDismissPayload(key)))
                 } else if (shouldMirror(n) && n.clearable) {
                     source.cancel(key) // onNotificationRemoved then tells the PC
+                    onRequestHandled?.invoke("dismiss", NotificationActionStatus.OK)
+                } else {
+                    onRequestHandled?.invoke("dismiss", NotificationActionStatus.REFUSED)
                 }
             }
             MessageType.NOTIFICATION_MUTE -> {
                 val appId = message.payloadAs<NotificationMutePayload>().appId
-                if (appId.isEmpty() || appId.length > MAX_APP_ID || appId == ownAppId) return
+                if (appId.isEmpty() || appId.length > MAX_APP_ID || appId == ownAppId) {
+                    onRequestHandled?.invoke("mute", NotificationActionStatus.INVALID); return
+                }
+                onRequestHandled?.invoke("mute", NotificationActionStatus.OK)
                 for (d in setAppAllowed(appId, false)) reply(BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, d))
             }
         }

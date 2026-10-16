@@ -14,9 +14,16 @@ class BridgeApplication : Application() {
     lateinit var identity: DeviceIdentity
         private set
 
+    /** Metadata-only diagnostics log (Settings › Diagnostics). */
+    val diagnostics: DiagnosticsLog by lazy {
+        DiagnosticsLog(java.io.File(filesDir, "logs")).also { it.enabled = BridgePrefs.diagnosticsEnabled(this) }
+    }
+
     /** Mirroring rules, per-app choices and the PC's notification requests (shared by listener and service). */
     val notificationMirror: NotificationMirror by lazy {
-        NotificationMirror(NotificationFilter(SharedPrefsNotificationFilterStore(this)), ListenerNotificationSource, packageName)
+        NotificationMirror(NotificationFilter(SharedPrefsNotificationFilterStore(this)), ListenerNotificationSource, packageName).also {
+            it.onRequestHandled = { kind, status -> diagnostics.info("notification.action", LogField.code("kind", kind), LogField.code("status", status)) }
+        }
     }
 
     companion object {
@@ -27,6 +34,7 @@ class BridgeApplication : Application() {
         super.onCreate()
         identity = DeviceIdentity.loadOrCreate(this)
         createNotificationChannels()
+        diagnostics.info("app.started", LogField.version("version", BridgePrefs.appVersion(this)), LogField.num("sdk", Build.VERSION.SDK_INT))
     }
 
     private fun createNotificationChannels() {

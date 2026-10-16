@@ -17,7 +17,9 @@ import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.bridge.app.core.BridgeApplication
+import com.bridge.app.core.BridgePrefs
 import com.bridge.app.network.PairingClient
 import com.bridge.app.network.SafeFileName
 import com.bridge.app.service.BridgeConnectionService
@@ -29,9 +31,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    private val requestNotificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* the service works either way */ }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -39,40 +38,49 @@ class MainActivity : ComponentActivity() {
         val store = SharedPrefsPairedDeviceStore(this)
         val pairingClient = PairingClient(identity, store)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            // The foreground-service notification is the user's cue that Bridge is connected.
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        // The notification permission is asked in the first-run guide (OnboardingScreen) or Settings, with its reason.
 
         setContent {
             MaterialTheme {
                 Surface {
                     var paired by remember { mutableStateOf<Boolean?>(null) } // null = still loading
+                    var onboarded by remember { mutableStateOf(BridgePrefs.onboardingDone(this@MainActivity)) }
+                    var screen by rememberSaveable { mutableStateOf("dashboard") }
                     val connection by BridgeConnectionService.state.collectAsState()
 
                     LaunchedEffect(Unit) {
                         paired = store.current() != null
-                        if (paired == true) BridgeConnectionService.start(this@MainActivity)
+                        if (paired == true) {
+                            BridgePrefs.setOnboardingDone(this@MainActivity) // upgraded from 0.1: already set up
+                            onboarded = true
+                            BridgeConnectionService.start(this@MainActivity)
+                        }
                     }
                     LaunchedEffect(connection.status) {
                         if (connection.status == BridgeConnectionService.Status.UNPAIRED) paired = false
                     }
 
-                    when (paired) {
-                        null -> Unit
-                        false -> PairingScreen(
+                    when {
+                        paired == null -> Unit
+                        // First run (an already-paired install upgrading from 0.1 skips the guide).
+                        paired == false && !onboarded -> OnboardingScreen {
+                            BridgePrefs.setOnboardingDone(this@MainActivity)
+                            onboarded = true
+                        }
+                        paired == false -> PairingScreen(
                             pairingClient = pairingClient,
                             deviceName = Build.MODEL,
                             notice = if (connection.status == BridgeConnectionService.Status.UNPAIRED)
                                 "${connection.pcName ?: "Your PC"} no longer recognises this phone. Scan a new code to pair again." else null,
                         ) {
                             paired = true
+                            screen = "dashboard"
                             BridgeConnectionService.start(this@MainActivity)
                         }
-                        true -> DashboardScreen(
+                        screen == "settings" -> SettingsScreen(
                             state = connection,
+                            onBack = { screen = "dashboard" },
+                            onChooseApps = { screen = "apps" },
                             onForget = {
                                 lifecycleScope.launch {
                                     BridgeConnectionService.forgetPc(this@MainActivity)
@@ -80,6 +88,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                         )
+                        screen == "apps" -> NotificationAppsScreen(onBack = { screen = "settings" })
+                        else -> DashboardScreen(state = connection, onSettings = { screen = "settings" })
                     }
                 }
             }

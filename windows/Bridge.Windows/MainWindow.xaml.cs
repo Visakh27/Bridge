@@ -7,6 +7,7 @@ using Bridge.Protocol;
 using Bridge.Security;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
@@ -32,14 +33,26 @@ public sealed partial class MainWindow : Window
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherQueueTimer _qrTimer;
     private BridgeSession? _session;
-    private readonly string _downloadDir =
+    private readonly SettingsStore _settings;
+    private readonly DiagnosticsLog _diagnostics;
+    private readonly TransferHistory _history = new();
+    private readonly string _dataDir;
+    private bool _applyingSettings;
+    private static readonly string DefaultDownloadDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Bridge");
+
+    private string _downloadDir => _settings.Current.DownloadFolder ?? DefaultDownloadDir;
+
+    public static string AppVersion => typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     public MainWindow()
     {
         InitializeComponent();
+        try { AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Bridge.ico")); } catch (Exception) { }
 
-        var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Bridge");
+        var dataDir = _dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Bridge");
+        _settings = new SettingsStore(Path.Combine(dataDir, "settings.json"));
+        _diagnostics = new DiagnosticsLog(Path.Combine(dataDir, "logs")) { Enabled = _settings.Current.Diagnostics };
         // Unfinished sends/receives survive reconnects and app restarts (24 h).
         _fileTransfer = new FileTransferService(new TransferStateStore(dataDir));
         var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "identity.bin"));
@@ -49,8 +62,16 @@ public sealed partial class MainWindow : Window
         _listener = new TcpBridgeListener(); // fixed port so paired phones can find us again
         _host = new BridgeHost(identity, store, _pairing, _fileTransfer, _clipboard, _downloadDir);
         _notificationActions = new NotificationActionRouter(_host);
+        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions);
+        _diagnostics.Info("app.started", LogField.Version("version", typeof(MainWindow).Assembly.GetName().Version),
+            LogField.Version("os", Environment.OSVersion.Version), LogField.Flag("packaged", StartupRegistration.IsPackaged));
 
         _fileTransfer.ProgressChanged += OnTransferProgress;
+        _history.Changed += QueueRenderRecent;
+        ApplySettingsToUi();
+        ShowOnboardingIfNeeded();
+        // Unpackaged: re-point the sign-in entry at this copy of Bridge (it may have been moved or updated).
+        if (_settings.Current.StartWithWindows && !StartupRegistration.IsPackaged) _ = StartupRegistration.SetAsync(true);
         _host.DevicePaired += device => DispatcherQueue.TryEnqueue(() =>
         {
             StatusText.Text = $"Paired with {device.DeviceName} — connecting…";
@@ -80,14 +101,20 @@ public sealed partial class MainWindow : Window
         try
         {
             _discovery = new DiscoveryResponder(identity, () => _listener.Port);
+            _discovery.Answered += () => _diagnostics.Info("discovery.answered");
             _ = _discovery.RunAsync(_cts.Token);
         }
-        catch (System.Net.Sockets.SocketException)
+        catch (System.Net.Sockets.SocketException ex)
         {
             // UDP 47821 is in use: phones can still connect at the address from the QR code.
             _discovery = null;
+            _diagnostics.Warn("discovery.unavailable", LogField.Error(ex));
         }
     }
+
+    /// <summary>Whether to stay in the tray at launch (never before the first-run guide was seen).</summary>
+    public bool ShouldStartHidden(bool launchedAtSignIn) =>
+        _settings.Current.OnboardingDone && (launchedAtSignIn || _settings.Current.StartMinimized);
 
     private async Task ShowQrCodeAsync()
     {
@@ -104,7 +131,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            QrInfoText.Text = $"Couldn't create a pairing code ({ex.GetType().Name}).";
+            QrInfoText.Text = "Couldn't create a pairing code. Select \"New code\" to try again.";
+            _diagnostics.Warn("qr.failed", LogField.Error(ex));
         }
     }
 
@@ -127,7 +155,9 @@ public sealed partial class MainWindow : Window
             _session = session;
             _clipboard.Enabled = ClipboardToggle.IsOn;
             PairingPanel.Visibility = Visibility.Collapsed;
-            DashboardPanel.Visibility = Visibility.Visible;
+            DevicePanel.Visibility = Visibility.Visible;
+            DropZoneText.Text = "Drop files or folders here to send them to your phone";
+            RenderRecent();
             DeviceNameText.Text = session.Device.DeviceName;
             StatusText.Text = "Connected";
             BatteryText.Text = "Battery unknown";
@@ -141,8 +171,10 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(_session, session)) return; // already replaced by a reconnect
             _session = null;
             StatusText.Text = $"{session.Device.DeviceName} disconnected — waiting for it to reconnect";
-            DashboardPanel.Visibility = Visibility.Collapsed;
+            DevicePanel.Visibility = Visibility.Collapsed;
             PairingPanel.Visibility = Visibility.Visible;
+            DropZoneText.Text = "Connect your phone to send files";
+            RenderRecent();
             _ = ShowQrCodeAsync();
         });
     }
@@ -159,6 +191,7 @@ public sealed partial class MainWindow : Window
 
     private void OnTransferProgress(TransferProgress progress)
     {
+        _history.Update(progress);
         DispatcherQueue.TryEnqueue(() =>
         {
             var sending = progress.Direction == TransferDirection.Sending;
@@ -178,7 +211,7 @@ public sealed partial class MainWindow : Window
                     TransferProgressBar.Visibility = Visibility.Collapsed;
                     TransferText.Text = sending
                         ? $"Sent {name}"
-                        : $"Saved {Path.GetFileName(progress.SavedPath ?? progress.FileName)} to Downloads\\Bridge";
+                        : $"Saved {Path.GetFileName(progress.SavedPath ?? progress.FileName)}";
                     break;
                 case TransferStatus.Interrupted:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
@@ -186,7 +219,7 @@ public sealed partial class MainWindow : Window
                     break;
                 case TransferStatus.Failed:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
-                    TransferText.Text = $"{name} didn't transfer correctly. Please try again.";
+                    TransferText.Text = sending ? $"{name} didn't transfer correctly. Use Retry below to send it again." : $"{name} didn't arrive correctly. Send it again from your phone.";
                     break;
                 case TransferStatus.Cancelled:
                     TransferProgressBar.Visibility = Visibility.Collapsed;
@@ -227,7 +260,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnClipboardToggled(object sender, RoutedEventArgs e) => _clipboard.Enabled = ClipboardToggle.IsOn;
+    private void OnClipboardToggled(object sender, RoutedEventArgs e)
+    {
+        _clipboard.Enabled = ClipboardToggle.IsOn;
+        if (!_applyingSettings) _settings.Update(s => s with { ClipboardSync = ClipboardToggle.IsOn });
+    }
 
     private void OnOpenReceivedClicked(object sender, RoutedEventArgs e)
     {
@@ -255,6 +292,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowPhoneNotification(NotificationPostPayload note)
     {
+        if (!_settings.Current.ShowPhoneNotifications) return;
         try
         {
             var builder = new AppNotificationBuilder()
@@ -342,12 +380,237 @@ public sealed partial class MainWindow : Window
         catch (Exception) { }
     }
 
+    // ------------------------------------------------------------------ first run
+
+    private void ShowOnboardingIfNeeded()
+    {
+        var first = !_settings.Current.OnboardingDone;
+        OnboardingPanel.Visibility = first ? Visibility.Visible : Visibility.Collapsed;
+        MainPanel.Visibility = first ? Visibility.Collapsed : Visibility.Visible;
+        SettingsButton.Visibility = first ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnOnboardingDoneClicked(object sender, RoutedEventArgs e)
+    {
+        _settings.Update(s => s with { OnboardingDone = true });
+        ShowOnboardingIfNeeded();
+    }
+
+    // ------------------------------------------------------------------ settings
+
+    private void ApplySettingsToUi()
+    {
+        _applyingSettings = true;
+        try
+        {
+            var s = _settings.Current;
+            _host.DownloadDirectory = _downloadDir;
+            DownloadFolderText.Text = _downloadDir;
+            ResetFolderButton.IsEnabled = s.DownloadFolder is not null;
+            StartWithWindowsToggle.IsOn = s.StartWithWindows;
+            StartMinimizedToggle.IsOn = s.StartMinimized;
+            ShowNotificationsToggle.IsOn = s.ShowPhoneNotifications;
+            DiagnosticsToggle.IsOn = s.Diagnostics;
+            SaveReportButton.IsEnabled = s.Diagnostics;
+            ClipboardToggle.IsOn = s.ClipboardSync;
+            _diagnostics.Enabled = s.Diagnostics;
+            VersionText.Text = $"Bridge {AppVersion}{(StartupRegistration.IsPackaged ? "" : " (unpackaged)")}";
+        }
+        finally { _applyingSettings = false; }
+    }
+
+    private async void OnSettingsClicked(object sender, RoutedEventArgs e)
+    {
+        SettingsMessageText.Text = "";
+        // The user (or policy) may have turned start-at-sign-in off in Windows' own settings.
+        var actual = await StartupRegistration.IsEnabledAsync();
+        if (actual is { } on && on != _settings.Current.StartWithWindows) _settings.Update(s => s with { StartWithWindows = on });
+        ApplySettingsToUi();
+        SettingsPanel.Visibility = Visibility.Visible;
+        MainPanel.Visibility = Visibility.Collapsed;
+        SettingsButton.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnSettingsDoneClicked(object sender, RoutedEventArgs e)
+    {
+        SettingsPanel.Visibility = Visibility.Collapsed;
+        MainPanel.Visibility = Visibility.Visible;
+        SettingsButton.Visibility = Visibility.Visible;
+    }
+
+    private async void OnSettingToggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingSettings) return;
+        SettingsMessageText.Text = "";
+        if (ReferenceEquals(sender, StartWithWindowsToggle))
+        {
+            var want = StartWithWindowsToggle.IsOn;
+            var ok = await StartupRegistration.SetAsync(want);
+            if (!ok && want) SettingsMessageText.Text = "Windows didn't allow Bridge to start at sign-in. You can turn it on in Settings › Apps › Startup.";
+            _settings.Update(s => s with { StartWithWindows = want && ok });
+        }
+        else if (ReferenceEquals(sender, DiagnosticsToggle))
+        {
+            var on = DiagnosticsToggle.IsOn;
+            if (!on) { _diagnostics.Enabled = false; _diagnostics.Clear(); } // off means nothing kept
+            _settings.Update(s => s with { Diagnostics = on });
+            if (on) { _diagnostics.Enabled = true; _diagnostics.Info("diagnostics.enabled"); }
+        }
+        else
+        {
+            _settings.Update(s => s with
+            {
+                StartMinimized = StartMinimizedToggle.IsOn,
+                ShowPhoneNotifications = ShowNotificationsToggle.IsOn,
+            });
+        }
+        ApplySettingsToUi();
+    }
+
+    private async void OnChangeFolderClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new global::Windows.Storage.Pickers.FolderPicker();
+            picker.FileTypeFilter.Add("*");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder is null) return;
+            if (SettingsStore.ValidFolder(folder.Path) is null)
+            {
+                SettingsMessageText.Text = "Choose a folder on this PC (network folders aren't supported).";
+                return;
+            }
+            Directory.CreateDirectory(folder.Path);
+            _settings.Update(s => s with { DownloadFolder = folder.Path });
+            ApplySettingsToUi();
+        }
+        catch (Exception ex)
+        {
+            SettingsMessageText.Text = "Couldn't use that folder. Please choose another.";
+            _diagnostics.Warn("settings.folder_failed", LogField.Error(ex));
+        }
+    }
+
+    private void OnResetFolderClicked(object sender, RoutedEventArgs e)
+    {
+        _settings.Update(s => s with { DownloadFolder = null });
+        ApplySettingsToUi();
+    }
+
+    private void OnSaveReportClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var s = _settings.Current;
+            var report = DiagnosticsReport.Build(_diagnostics, DateTimeOffset.UtcNow,
+                LogField.Version("app_version", typeof(MainWindow).Assembly.GetName().Version),
+                LogField.Version("os_version", Environment.OSVersion.Version),
+                LogField.Code("arch", System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString()),
+                LogField.Flag("packaged", StartupRegistration.IsPackaged),
+                LogField.Flag("connected", _session is not null),
+                LogField.Flag("custom_download_folder", s.DownloadFolder is not null),
+                LogField.Flag("start_with_windows", s.StartWithWindows),
+                LogField.Flag("show_notifications", s.ShowPhoneNotifications),
+                LogField.Flag("clipboard_sync", s.ClipboardSync),
+                LogField.Flag("discovery", _discovery is not null));
+            Directory.CreateDirectory(_downloadDir);
+            var path = Path.Combine(_downloadDir, $"bridge-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+            File.WriteAllText(path, report);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+            SettingsMessageText.Text = "";
+        }
+        catch (Exception ex)
+        {
+            SettingsMessageText.Text = "Couldn't save the report. Check that the received-files folder is available.";
+            _diagnostics.Warn("diagnostics.report_failed", LogField.Error(ex));
+        }
+    }
+
+    private void OnOpenLogFolderClicked(object sender, RoutedEventArgs e)
+    {
+        var dir = _diagnostics.Directory ?? _dataDir;
+        Directory.CreateDirectory(dir);
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+    }
+
+    // ------------------------------------------------------------------ recent transfers
+
+    private int _renderQueued;
+
+    /// <summary>Progress arrives per 64 KB chunk; redraw the list at most ~4 times a second.</summary>
+    private void QueueRenderRecent()
+    {
+        if (Interlocked.Exchange(ref _renderQueued, 1) == 1) return;
+        _ = Task.Delay(250).ContinueWith(_ => DispatcherQueue.TryEnqueue(() =>
+        {
+            Volatile.Write(ref _renderQueued, 0);
+            RenderRecent();
+        }), TaskScheduler.Default);
+    }
+
+    private void RenderRecent()
+    {
+        var entries = _history.Entries;
+        RecentPanel.Children.Clear();
+        ClearRecentButton.Visibility = entries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (entries.Count == 0) { RecentPanel.Children.Add(RecentEmptyText); return; }
+        foreach (var entry in entries)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var text = new StackPanel();
+            var arrow = entry.Direction == TransferDirection.Sending ? "↑" : "↓";
+            var title = entry.Folder is null ? entry.FileName : $"{entry.Folder} › {entry.FileName}";
+            if (entry.Direction == TransferDirection.Sending && entry.Folder is not null && entry.Status == TransferStatus.Failed)
+                title += " (send the folder again to retry)";
+            text.Children.Add(new TextBlock { Text = $"{arrow} {title}", TextTrimming = TextTrimming.CharacterEllipsis });
+            text.Children.Add(new TextBlock { Text = TransferHistory.Describe(entry), FontSize = 12, Opacity = 0.65 });
+            row.Children.Add(text);
+
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            if (entry.CanRetry)
+            {
+                var retry = new Button { Content = "Retry", IsEnabled = _session is not null };
+                ToolTipService.SetToolTip(retry, _session is null ? "Connect your phone first" : "Send it again");
+                var path = entry.SourcePath!;
+                var oldId = entry.TransferId;
+                retry.Click += async (_, _) =>
+                {
+                    retry.IsEnabled = false;
+                    if (_session is not { } s) return;
+                    _history.Remove(oldId); // the new attempt gets its own row
+                    _diagnostics.Info("transfer.retry");
+                    await s.SendFileAsync(path);
+                };
+                buttons.Children.Add(retry);
+            }
+            if (entry.CanOpen)
+            {
+                var saved = entry.SavedPath!;
+                var open = new Button { Content = "Open" };
+                open.Click += (_, _) => { try { Process.Start(new ProcessStartInfo(saved) { UseShellExecute = true }); } catch (Exception) { } };
+                var show = new Button { Content = "Show in folder" };
+                show.Click += (_, _) => Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{saved}\"") { UseShellExecute = true });
+                buttons.Children.Add(open);
+                buttons.Children.Add(show);
+            }
+            Grid.SetColumn(buttons, 1);
+            row.Children.Add(buttons);
+            RecentPanel.Children.Add(row);
+        }
+    }
+
+    private void OnClearRecentClicked(object sender, RoutedEventArgs e) => _history.ClearFinished();
+
     public async Task ShutdownAsync()
     {
         _qrTimer.Stop();
         _cts.Cancel();
         _discovery?.Dispose();
         _fileTransfer.State.Dispose(); // write any pending resume state before exiting
+        _diagnostics.Info("app.exit");
         await _host.DisposeAsync();
         _listener.Dispose();
     }
