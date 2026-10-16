@@ -13,7 +13,8 @@ public sealed class BridgeDiagnostics
 {
     private readonly DiagnosticsLog _log;
 
-    public BridgeDiagnostics(DiagnosticsLog log, BridgeHost host, FileTransferService files, NotificationActionRouter? notificationActions = null)
+    public BridgeDiagnostics(DiagnosticsLog log, BridgeHost host, FileTransferService files, NotificationActionRouter? notificationActions = null,
+        PhotoBrowser? photos = null)
     {
         _log = log;
         host.DevicePaired += d => _log.Info("pair.accepted", LogField.Id("peer", d.DeviceId, _log));
@@ -23,6 +24,13 @@ public sealed class BridgeDiagnostics
         if (notificationActions is not null)
             notificationActions.Completed += (kind, status) =>
                 _log.Info("notification.action", LogField.Code("kind", kind), LogField.Code("status", status));
+        if (photos is not null)
+            photos.Completed += (kind, status) =>
+            {
+                // A grid loads dozens of previews at once: log those only when they fail.
+                if (kind == "thumb" && status == PhotoStatus.Ok) return;
+                _log.Info("photos.request", LogField.Code("kind", kind), LogField.Code("status", status));
+            };
     }
 
     /// <summary>Known message types logged with '_' instead of '.'; anything else is "unknown".</summary>

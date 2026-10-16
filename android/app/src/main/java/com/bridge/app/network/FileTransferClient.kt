@@ -166,7 +166,9 @@ class FileTransferClient(
         displayName: String = file.name,
         options: SendOptions = SendOptions(channel.peerDeviceId, false, false),
         deleteWhenDone: Boolean = false,
-    ): TransferProgress = sendEntry(channel, TransferStateStore.OutboxEntry(UUID.randomUUID().toString(), options.peerId,
+        /** Lets a caller announce the transfer before it starts (photos.fetched). */
+        transferId: String = UUID.randomUUID().toString(),
+    ): TransferProgress = sendEntry(channel, TransferStateStore.OutboxEntry(transferId, options.peerId,
         file.path, displayName, created = System.currentTimeMillis(), deleteWhenDone = deleteWhenDone), options)
 
     /**

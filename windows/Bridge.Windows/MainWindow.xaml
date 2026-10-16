@@ -2,6 +2,7 @@
     x:Class="Bridge.Windows.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Bridge.Windows"
     Title="Bridge">
     <Grid Padding="24" RowSpacing="16">
         <Grid.RowDefinitions>
@@ -17,12 +18,14 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Image Grid.Column="0" Source="Assets/Square44x44Logo.png" Width="32" Height="32" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" Text="Bridge" FontSize="28" FontWeight="SemiBold" VerticalAlignment="Center" />
             <TextBlock Grid.Column="2" x:Name="StatusText" Text="Not paired" VerticalAlignment="Center" Opacity="0.7"
                        TextTrimming="CharacterEllipsis" />
-            <Button Grid.Column="3" x:Name="SettingsButton" Content="Settings" Click="OnSettingsClicked" />
+            <Button Grid.Column="3" x:Name="PhotosButton" Content="Photos" Click="OnPhotosClicked" Margin="0,0,8,0" />
+            <Button Grid.Column="4" x:Name="SettingsButton" Content="Settings" Click="OnSettingsClicked" />
         </Grid>
 
         <!-- First run -->
@@ -89,6 +92,37 @@
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
+        </Grid>
+
+        <!-- Photos on the phone -->
+        <Grid Grid.Row="1" x:Name="PhotosPanel" Visibility="Collapsed" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                <Button Content="Back" Click="OnPhotosBackClicked" />
+                <TextBlock Text="Photos on your phone" FontSize="22" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,16,0" />
+                <Button x:Name="PhotosRefreshButton" Content="Refresh" Click="OnPhotosRefreshClicked" />
+                <Button x:Name="PhotosSaveButton" Content="Save to PC" Click="OnPhotosSaveClicked" IsEnabled="False" />
+                <Button x:Name="PhotosOpenButton" Content="Open" Click="OnPhotosOpenClicked" IsEnabled="False" />
+            </StackPanel>
+            <TextBlock Grid.Row="1" x:Name="PhotosStatusText" TextWrapping="Wrap" Opacity="0.8" />
+            <GridView Grid.Row="2" x:Name="PhotosGrid" SelectionMode="Extended" IsItemClickEnabled="False"
+                      SelectionChanged="OnPhotosSelectionChanged" DoubleTapped="OnPhotosDoubleTapped">
+                <GridView.ItemTemplate>
+                    <DataTemplate x:DataType="local:PhotoTile">
+                        <Grid Width="140" Height="140" Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                              ToolTipService.ToolTip="{x:Bind Tooltip}">
+                            <Image Source="{x:Bind Thumb, Mode=OneWay}" Stretch="UniformToFill" />
+                        </Grid>
+                    </DataTemplate>
+                </GridView.ItemTemplate>
+            </GridView>
+            <Button Grid.Row="3" x:Name="PhotosMoreButton" Content="Load more" Click="OnPhotosMoreClicked"
+                    HorizontalAlignment="Center" Visibility="Collapsed" />
         </Grid>
 
         <!-- Settings -->

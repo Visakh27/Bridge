@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PhotosPagePayload",
+  "description": "Phone -> PC: a page of photos; 'next' is the cursor for the next page, absent at the end.",
+  "type": "object",
+  "required": [
+    "requestId",
+    "status",
+    "items"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "disabled",
+        "no_permission",
+        "not_found",
+        "busy",
+        "invalid",
+        "error"
+      ]
+    },
+    "next": {
+      "type": "string",
+      "pattern": "^[0-9]{1,15}:[0-9]{1,19}$"
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "takenAt",
+          "width",
+          "height",
+          "size",
+          "mime"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,19}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "takenAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mime": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

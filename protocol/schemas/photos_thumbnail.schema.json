@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PhotosThumbnailPayload",
+  "description": "Phone -> PC: the preview (base64 JPEG, at most 320 px on its long side and 256 KB) or why not.",
+  "type": "object",
+  "required": [
+    "requestId",
+    "id",
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "disabled",
+        "no_permission",
+        "not_found",
+        "busy",
+        "invalid",
+        "error"
+      ]
+    },
+    "mime": {
+      "const": "image/jpeg"
+    },
+    "data": {
+      "type": "string",
+      "maxLength": 349528
+    }
+  }
+}

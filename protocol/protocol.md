@@ -129,7 +129,7 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 |---|---|---|
 | `pairing.request` | A→W | `{"pairingToken","deviceName","publicKeyBase64"}` (phone identity key) |
 | `pairing.accept` / `pairing.reject` | W→A | `{"deviceName","publicKeyBase64"}` / `{"reason"}` |
-| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions"]}` |
+| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions","photos"]}` |
 | `presence.ping` / `presence.pong` | both | `{}` — keep-alive; each side pings every 15 s and drops the connection after 45 s of silence |
 | `device.status` | A→W | `{"batteryPercent","charging","connectionQuality"}` |
 | `clipboard.update` | both | `{"format":"text","data":"..."}` (≤ 10,000 chars) |
@@ -144,6 +144,10 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 | `notification.action` | W→A | `{"requestId","key","actionId"}` + `replyText` for reply buttons |
 | `notification.action.result` | A→W | `{"requestId","status":"ok"|"gone"|"refused"|"invalid"|"failed"}` |
 | `notification.mute` | W→A | `{"appId"}` — stop mirroring that app |
+| `photos.list` / `photos.page` | W→A / A→W | `{"requestId","limit","before"?}` / `{"requestId","status","items","next"?}` (see Photos) |
+| `photos.thumb` / `photos.thumbnail` | W→A / A→W | `{"requestId","id"}` / `{"requestId","id","status","mime"?,"data"?}` |
+| `photos.fetch` / `photos.fetched` | W→A / A→W | `{"requestId","id"}` / `{"requestId","id","status","transferId"?}` |
+| `photos.changed` | A→W | `{}` — the phone's photos changed; refresh |
 | `error` | both | `{"code","message"}` — see docs/architecture.md error codes |
 
 ## Versioning
@@ -253,3 +257,30 @@ W→A notification messages. Schemas: `notification_post`, `notification_action`
   showing. Only the phone can turn an app back on.
 - The phone acts only on notifications that are showing now *and* that it
   would mirror; every request is checked again against the live notification.
+
+## Photos (`photos`)
+
+The phone advertises `photos` when it can answer photo requests; the PC
+advertises it when it can browse (the phone sends `photos.changed` only to
+such a PC). Schemas: `photos_*.schema.json`.
+
+- Off by default on the phone: until the user turns on "Let your PC browse
+  photos", every request is answered `disabled`; without Android's photo
+  permission, `no_permission`. Android 14 "selected photos" access limits the
+  PC to those photos.
+- `photos.list`: newest first, at most `limit` (1–100) items. `before` is the
+  `next` cursor of the previous page (`"<sortKey>:<id>"`, digits only); a page
+  without `next` is the last. Items: `{"id","name","takenAt","width","height","size","mime"}`
+  — `id` is the phone's library id (digits), `takenAt` epoch ms.
+- `photos.thumb`: a JPEG preview at most 320 px on its long side and 256 KB.
+- `photos.fetch`: the phone answers `photos.fetched` with `ok` and a
+  `transferId`, then sends the original as a normal file transfer with that id
+  (resumable, so it continues after a dropped connection).
+- Photos are addressed only by library id; the phone never takes a path. It
+  answers every request (`ok`, `disabled`, `no_permission`, `not_found`,
+  `busy` when more than 64 are waiting, `invalid`, `error`), working off its
+  receive loop so file transfers aren't held up. The PC matches answers by
+  `requestId`, ignores anything it didn't ask for, gives up after 20 s, and
+  checks previews (JPEG marker, size) and items (digit ids) before use.
+- `photos.changed` is sent at most once per 2 s of quiet after the phone's
+  library changes.

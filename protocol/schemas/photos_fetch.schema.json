@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PhotosFetchPayload",
+  "description": "PC -> phone: send the original of photo 'id' (it arrives as a normal file transfer).",
+  "type": "object",
+  "required": [
+    "requestId",
+    "id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9]{1,19}$"
+    }
+  }
+}

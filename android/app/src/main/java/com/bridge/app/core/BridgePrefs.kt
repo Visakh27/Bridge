@@ -7,6 +7,7 @@ object BridgePrefs {
     private const val FILE = "bridge_settings"
     private const val ONBOARDING_DONE = "onboarding_done"
     private const val DIAGNOSTICS = "diagnostics"
+    private const val PHOTOS = "photos_enabled"
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -21,6 +22,10 @@ object BridgePrefs {
         if (!enabled) { log.enabled = false; log.clear() } // off means nothing kept
         else { log.enabled = true; log.info("diagnostics.enabled") }
     }
+
+    /** "Let your PC browse photos": off until the user turns it on. */
+    fun photosEnabled(context: Context) = prefs(context).getBoolean(PHOTOS, false)
+    fun setPhotosEnabled(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean(PHOTOS, enabled).apply()
 
     fun appVersion(context: Context): String =
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
