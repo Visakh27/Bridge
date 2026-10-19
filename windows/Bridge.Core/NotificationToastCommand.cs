@@ -16,6 +16,8 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
     public const string Press = "press";
     public const string Dismiss = "dismiss";
     public const string Mute = "mute";
+    /// <summary>Drop what Explorer handed over while the phone was away (the "waiting to send" toast).</summary>
+    public const string CancelSend = "cancel-send";
 
     /// <summary>Id of the toast's reply text box.</summary>
     public const string ReplyInputId = "reply";
@@ -44,6 +46,7 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
             Reply or Press when !string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(id) => new(kind, key, id),
             Dismiss when !string.IsNullOrEmpty(key) => new(kind, key),
             Mute when !string.IsNullOrEmpty(app) => new(kind, AppId: app),
+            CancelSend => new(kind),
             _ => new(Open),
         };
     }

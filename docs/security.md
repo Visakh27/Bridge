@@ -90,7 +90,14 @@
    phone's temporary copy is deleted once delivered. On the PC, previews are
    accepted only as small JPEGs and photo names are cleaned like any received
    file name. Logs record request kinds and outcomes, never ids or names.
-13. **Retry copies** — a file shared from another Android app is copied into
+13. **File Explorer** — files leave the PC only when the user picks "Send to
+   › Bridge" or "Share › Bridge" for them. Bridge accepts only absolute paths
+   that exist (at most 1,000 per request) and sends them through the normal
+   transfer. If the phone isn't connected, the request is held in memory (not
+   on disk) for up to 30 minutes, with a notification that can cancel it; it
+   is dropped if Bridge exits. The Send to entry is a per-user shortcut; the
+   MSIX uses Windows' Share contract instead.
+14. **Retry copies** — a file shared from another Android app is copied into
    Bridge's private cache to send it. If the send fails, the copy is kept (at
    most 24 h, or until "Clear" in Recent transfers) so it can be retried;
    a cancelled send's copy is deleted at once.

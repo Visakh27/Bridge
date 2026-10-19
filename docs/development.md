@@ -72,10 +72,14 @@ and status-bar). `--check` verifies the committed assets.
 5. Turn on "Sync clipboard" on both sides to test clipboard updates. On
    Android 10+, copies made on the phone are only sent while Bridge is open
    (a platform privacy rule); PC → phone works in the background.
-6. Photos: on the phone, Settings › "Let your PC browse photos" (and allow
+6. File Explorer: right-click files or folders › Send to › Bridge (your
+   phone) (unpackaged) or Share › Bridge (MSIX). With the phone away, the
+   notification says Bridge is waiting (Cancel to drop it); they go out when
+   it reconnects. Settings can pin the received-files folder to Quick access.
+7. Photos: on the phone, Settings › "Let your PC browse photos" (and allow
    photo access); on the PC, select **Photos** to see them, then Save to PC or
    Open.
-7. Tap "Show phone notifications on your PC" on Android and grant
+8. Tap "Show phone notifications on your PC" on Android and grant
    notification access to mirror notifications. On the PC, a mirrored
    message has a reply box and the app's own buttons (e.g. "Mark as read"),
    plus Dismiss; right-click (or "…") for "Stop <app> notifications". On the
@@ -121,6 +125,15 @@ and status-bar). `--check` verifies the committed assets.
   write cost on 5,000-item queues, and crash-safe journals. Cross-platform
   (`e2e-resume`): 30 MB files resumed both ways (one into a restarted phone
   app), folders both ways with non-ASCII names, and an interrupted folder.
+- File Explorer: `ExplorerSendTests` (xUnit) cover Windows command-line
+  splitting (quotes, backslashes, empty arguments), `--send` parsing (only
+  real absolute paths, duplicates, caps, other flags), sending at once,
+  holding until the phone reconnects (several requests, in order), expiry,
+  cancel, a phone that drops again before sending, files deleted while
+  waiting, folders, and the summaries. Cross-platform (`e2e-explorer`): a
+  redirected command line with non-ASCII names and a folder queued while the
+  phone is away and delivered byte-for-byte on connect, cancel and expiry
+  never delivering, a later request after reconnect, and both logs checked.
 - Photos: `PhotoBrowserTests` (xUnit) and `PhotosTest` (JUnit) cover paging
   through a whole library once (ties included), page-size caps, hostile ids
   and cursors (never reaching the library), off / no-permission / busy
@@ -152,7 +165,9 @@ and status-bar). `--check` verifies the committed assets.
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: the Photos view and
+- Manual/integration still needed on real devices: Explorer's Send to entry
+  (and a second launch handing it to the running Bridge), the MSIX Share
+  target, the waiting notification's Cancel, the Quick access pin, the Photos view and
   phone setting (permission prompt, Android 14 selected photos, HEIC files,
   previews from MediaStore, refresh after taking a photo), the new WinUI and Compose
   screens (first-run guides, Settings, Recent transfers), start at sign-in
