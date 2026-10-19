@@ -47,6 +47,12 @@ Bridge.Security ────────┤    platform)         ├────
   what a toast button carries. Bridge.Windows only builds toasts and forwards
   clicks.
 
+- **Photos** — Android: `photos/PhotoService` (plain Kotlin: validation,
+  paging cursors, a bounded worker queue, change hints) over a `PhotoLibrary`,
+  which is `MediaStorePhotoLibrary` on a device. Windows: `Bridge.Core`
+  `PhotoBrowser` (request/answer matching, preview cache, waiting for a
+  fetched original's transfer); Bridge.Windows' Photos view is a thumbnail
+  grid over it.
 - **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
   `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
   `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and

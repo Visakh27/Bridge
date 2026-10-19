@@ -112,6 +112,7 @@ object Features {
     const val FILES = "files"
     const val CLIPBOARD = "clipboard"
     const val NOTIFICATIONS = "notifications"
+    /** The PC can browse this phone's photos (photos.*). */
     const val PHOTOS = "photos"
     /** Interrupted transfers continue where they stopped (file.resume). */
     const val FILES_RESUME = "files.resume"
@@ -127,4 +128,38 @@ object ErrorCodes {
     const val DEVICE_UNPAIRED = "DEVICE_UNPAIRED"
     const val TRANSFER_INTERRUPTED = "TRANSFER_INTERRUPTED"
     const val PERMISSION_DENIED = "PERMISSION_DENIED"
+}
+
+/** One photo. [id] is the MediaStore id (digits); [takenAt] is epoch ms. */
+@Serializable data class PhotoInfo(val id: String, val name: String, val takenAt: Long, val width: Int, val height: Int, val size: Long, val mime: String)
+
+/** PC → phone: newest first, up to [limit] (≤ 100), older than cursor [before]. */
+@Serializable data class PhotosListPayload(val requestId: String, val limit: Int, val before: String? = null)
+
+/** Phone → PC: a page; [next] is the cursor for the next page (absent at the end). */
+@Serializable data class PhotosPagePayload(val requestId: String, val status: String, val items: List<PhotoInfo>, val next: String? = null)
+
+/** PC → phone: a small JPEG preview of photo [id]. */
+@Serializable data class PhotosThumbPayload(val requestId: String, val id: String)
+
+/** Phone → PC: the preview (base64 JPEG, ≤ 320 px long side) or why not. */
+@Serializable data class PhotosThumbnailPayload(val requestId: String, val id: String, val status: String, val mime: String? = null, val data: String? = null)
+
+/** PC → phone: send the original of photo [id] (as a normal file transfer). */
+@Serializable data class PhotosFetchPayload(val requestId: String, val id: String)
+
+/** Phone → PC: accepted ([transferId] is the transfer that follows) or why not. */
+@Serializable data class PhotosFetchedPayload(val requestId: String, val id: String, val status: String, val transferId: String? = null)
+
+object PhotoStatus {
+    const val OK = "ok"
+    /** "Let your PC browse photos" is off on the phone. */
+    const val DISABLED = "disabled"
+    /** Android hasn't given Bridge access to photos. */
+    const val NO_PERMISSION = "no_permission"
+    const val NOT_FOUND = "not_found"
+    /** Too many requests waiting; ask again shortly. */
+    const val BUSY = "busy"
+    const val INVALID = "invalid"
+    const val ERROR = "error"
 }

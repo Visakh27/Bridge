@@ -72,7 +72,10 @@ and status-bar). `--check` verifies the committed assets.
 5. Turn on "Sync clipboard" on both sides to test clipboard updates. On
    Android 10+, copies made on the phone are only sent while Bridge is open
    (a platform privacy rule); PC → phone works in the background.
-6. Tap "Show phone notifications on your PC" on Android and grant
+6. Photos: on the phone, Settings › "Let your PC browse photos" (and allow
+   photo access); on the PC, select **Photos** to see them, then Save to PC or
+   Open.
+7. Tap "Show phone notifications on your PC" on Android and grant
    notification access to mirror notifications. On the PC, a mirrored
    message has a reply box and the app's own buttons (e.g. "Mark as read"),
    plus Dismiss; right-click (or "…") for "Stop <app> notifications". On the
@@ -118,6 +121,17 @@ and status-bar). `--check` verifies the committed assets.
   write cost on 5,000-item queues, and crash-safe journals. Cross-platform
   (`e2e-resume`): 30 MB files resumed both ways (one into a restarted phone
   app), folders both ways with non-ASCII names, and an interrupted folder.
+- Photos: `PhotoBrowserTests` (xUnit) and `PhotosTest` (JUnit) cover paging
+  through a whole library once (ties included), page-size caps, hostile ids
+  and cursors (never reaching the library), off / no-permission / busy
+  answers, permission withdrawn mid-request, preview checks (JPEG marker,
+  size, mime, right photo), caching and de-duplicated requests, fetch
+  announcing its transfer first, a transfer finishing before its answer is
+  read, an unrelated transfer not being mistaken for the photo, interrupted
+  fetches, copies deleted when a fetch can't be delivered, debounced change
+  hints, stray answers, and logs without names. Cross-platform
+  (`e2e-photos`): photos off then on, 130 photos in 3 pages, previews,
+  a 3 MB original byte-for-byte, a deleted photo, and both logs checked.
 - Polish: `PolishTests` (xUnit) and `PolishTest` (JUnit) cover the
   diagnostics log (only safe field shapes, rotation and caps, retention,
   disabled/cleared, concurrent writers, unwritable folders), a real session
@@ -138,7 +152,9 @@ and status-bar). `--check` verifies the committed assets.
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: the new WinUI and Compose
+- Manual/integration still needed on real devices: the Photos view and
+  phone setting (permission prompt, Android 14 selected photos, HEIC files,
+  previews from MediaStore, refresh after taking a photo), the new WinUI and Compose
   screens (first-run guides, Settings, Recent transfers), start at sign-in
   (unpackaged and MSIX), a second launch handing over to the running Bridge,
   installing the MSIX (firewall rules, toast activation), the icons on

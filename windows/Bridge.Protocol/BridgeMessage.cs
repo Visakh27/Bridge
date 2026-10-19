@@ -28,6 +28,13 @@ public static class MessageType
     public const string NotificationAction = "notification.action";
     public const string NotificationActionResult = "notification.action.result";
     public const string NotificationMute = "notification.mute";
+    public const string PhotosList = "photos.list";
+    public const string PhotosPage = "photos.page";
+    public const string PhotosThumb = "photos.thumb";
+    public const string PhotosThumbnail = "photos.thumbnail";
+    public const string PhotosFetch = "photos.fetch";
+    public const string PhotosFetched = "photos.fetched";
+    public const string PhotosChanged = "photos.changed";
     public const string Error = "error";
 }
 
@@ -37,6 +44,7 @@ public static class Features
     public const string Files = "files";
     public const string Clipboard = "clipboard";
     public const string Notifications = "notifications";
+    /// <summary>The PC can browse the phone's photos (photos.*); the phone advertises it.</summary>
     public const string Photos = "photos";
     /// <summary>Interrupted transfers continue where they stopped (file.resume).</summary>
     public const string FilesResume = "files.resume";

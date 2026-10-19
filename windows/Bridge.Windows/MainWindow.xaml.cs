@@ -36,6 +36,11 @@ public sealed partial class MainWindow : Window
     private readonly SettingsStore _settings;
     private readonly DiagnosticsLog _diagnostics;
     private readonly TransferHistory _history = new();
+    private readonly PhotoBrowser _photos;
+    private readonly System.Collections.ObjectModel.ObservableCollection<PhotoTile> _photoTiles = [];
+    private string? _photoCursor;
+    private bool _photosStale = true;
+    private int _photoGeneration; // bumps on every reload so late answers for an old list are ignored
     private readonly string _dataDir;
     private bool _applyingSettings;
     private static readonly string DefaultDownloadDir =
@@ -62,7 +67,13 @@ public sealed partial class MainWindow : Window
         _listener = new TcpBridgeListener(); // fixed port so paired phones can find us again
         _host = new BridgeHost(identity, store, _pairing, _fileTransfer, _clipboard, _downloadDir);
         _notificationActions = new NotificationActionRouter(_host);
-        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions);
+        _photos = new PhotoBrowser(_host, _fileTransfer);
+        _photos.Changed += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (PhotosPanel.Visibility == Visibility.Visible) _ = ReloadPhotosAsync(); else _photosStale = true;
+        });
+        PhotosGrid.ItemsSource = _photoTiles;
+        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos);
         _diagnostics.Info("app.started", LogField.Version("version", typeof(MainWindow).Assembly.GetName().Version),
             LogField.Version("os", Environment.OSVersion.Version), LogField.Flag("packaged", StartupRegistration.IsPackaged));
 
@@ -152,8 +163,10 @@ public sealed partial class MainWindow : Window
         session.NotificationDismissed += RemovePhoneNotification;
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_session?.Device.DeviceId != session.Device.DeviceId) { _photos.ClearCache(); _photosStale = true; }
             _session = session;
             _clipboard.Enabled = ClipboardToggle.IsOn;
+            if (PhotosPanel.Visibility == Visibility.Visible && _photosStale) _ = ReloadPhotosAsync();
             PairingPanel.Visibility = Visibility.Collapsed;
             DevicePanel.Visibility = Visibility.Visible;
             DropZoneText.Text = "Drop files or folders here to send them to your phone";
@@ -388,6 +401,7 @@ public sealed partial class MainWindow : Window
         OnboardingPanel.Visibility = first ? Visibility.Visible : Visibility.Collapsed;
         MainPanel.Visibility = first ? Visibility.Collapsed : Visibility.Visible;
         SettingsButton.Visibility = first ? Visibility.Collapsed : Visibility.Visible;
+        PhotosButton.Visibility = first ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OnOnboardingDoneClicked(object sender, RoutedEventArgs e)
@@ -428,7 +442,9 @@ public sealed partial class MainWindow : Window
         ApplySettingsToUi();
         SettingsPanel.Visibility = Visibility.Visible;
         MainPanel.Visibility = Visibility.Collapsed;
+        PhotosPanel.Visibility = Visibility.Collapsed;
         SettingsButton.Visibility = Visibility.Collapsed;
+        PhotosButton.Visibility = Visibility.Collapsed;
     }
 
     private void OnSettingsDoneClicked(object sender, RoutedEventArgs e)
@@ -436,6 +452,7 @@ public sealed partial class MainWindow : Window
         SettingsPanel.Visibility = Visibility.Collapsed;
         MainPanel.Visibility = Visibility.Visible;
         SettingsButton.Visibility = Visibility.Visible;
+        PhotosButton.Visibility = Visibility.Visible;
     }
 
     private async void OnSettingToggled(object sender, RoutedEventArgs e)
@@ -532,6 +549,143 @@ public sealed partial class MainWindow : Window
         var dir = _diagnostics.Directory ?? _dataDir;
         Directory.CreateDirectory(dir);
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+    }
+
+    // ------------------------------------------------------------------ photos
+
+    private void OnPhotosClicked(object sender, RoutedEventArgs e)
+    {
+        MainPanel.Visibility = Visibility.Collapsed;
+        SettingsPanel.Visibility = Visibility.Collapsed;
+        PhotosPanel.Visibility = Visibility.Visible;
+        PhotosButton.Visibility = Visibility.Collapsed;
+        if (_photosStale || _photoTiles.Count == 0) _ = ReloadPhotosAsync();
+    }
+
+    private void OnPhotosBackClicked(object sender, RoutedEventArgs e)
+    {
+        PhotosPanel.Visibility = Visibility.Collapsed;
+        MainPanel.Visibility = Visibility.Visible;
+        PhotosButton.Visibility = Visibility.Visible;
+    }
+
+    private void OnPhotosRefreshClicked(object sender, RoutedEventArgs e) => _ = ReloadPhotosAsync();
+
+    private void OnPhotosMoreClicked(object sender, RoutedEventArgs e) => _ = LoadMorePhotosAsync(_photoGeneration);
+
+    private async Task ReloadPhotosAsync()
+    {
+        _photosStale = false;
+        var generation = ++_photoGeneration;
+        _photoTiles.Clear();
+        _photoCursor = null;
+        await LoadMorePhotosAsync(generation);
+    }
+
+    /// <summary>The grid shows at most this many (the newest); older ones are on the phone.</summary>
+    private const int MaxPhotoTiles = 1200;
+
+    private async Task LoadMorePhotosAsync(int generation)
+    {
+        PhotosMoreButton.IsEnabled = false;
+        PhotosRefreshButton.IsEnabled = false;
+        if (_session is null) PhotosStatusText.Text = PhotoBrowser.Explain(PhotoStatus.Unavailable);
+        else if (!_photos.PhoneSupportsPhotos) PhotosStatusText.Text = "Update Bridge on your phone to see its photos here.";
+        else PhotosStatusText.Text = "Loading…";
+        try
+        {
+            if (_session is null || !_photos.PhoneSupportsPhotos) { PhotosMoreButton.Visibility = Visibility.Collapsed; return; }
+            var page = await _photos.ListAsync(_photoCursor);
+            if (generation != _photoGeneration) return; // a newer reload took over
+            if (page.Status != PhotoStatus.Ok)
+            {
+                PhotosStatusText.Text = PhotoBrowser.Explain(page.Status);
+                PhotosMoreButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+            var tiles = page.Items.Select(i => new PhotoTile(i)).ToList();
+            foreach (var t in tiles) _photoTiles.Add(t);
+            _photoCursor = page.Next;
+            var full = _photoTiles.Count >= MaxPhotoTiles;
+            PhotosMoreButton.Visibility = page.Next is null || full ? Visibility.Collapsed : Visibility.Visible;
+            PhotosStatusText.Text = _photoTiles.Count == 0 ? "No photos on your phone (or none Bridge is allowed to see)."
+                : full ? $"Showing the newest {_photoTiles.Count} photos." : $"{_photoTiles.Count} photos";
+            _ = LoadThumbnailsAsync(tiles, generation);
+        }
+        finally
+        {
+            PhotosMoreButton.IsEnabled = true;
+            PhotosRefreshButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Fills in previews a few at a time (the phone makes them one by one).</summary>
+    private async Task LoadThumbnailsAsync(IReadOnlyList<PhotoTile> tiles, int generation)
+    {
+        using var gate = new SemaphoreSlim(4);
+        await Task.WhenAll(tiles.Select(async tile =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                if (generation != _photoGeneration) return;
+                var thumb = await _photos.ThumbnailAsync(tile.Info.Id);
+                if (thumb.Jpeg is null) return;
+                // Decode at tile size, not the preview's 320 px: thousands of tiles must stay light.
+                var bitmap = new BitmapImage { DecodePixelWidth = 200 };
+                using var stream = new MemoryStream(thumb.Jpeg);
+                await bitmap.SetSourceAsync(stream.AsRandomAccessStream());
+                tile.Thumb = bitmap;
+            }
+            catch (Exception) { /* a preview that can't be shown stays blank */ }
+            finally { gate.Release(); }
+        }));
+    }
+
+    private void OnPhotosSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var n = PhotosGrid.SelectedItems.Count;
+        PhotosSaveButton.IsEnabled = n > 0;
+        PhotosOpenButton.IsEnabled = n == 1;
+    }
+
+    private async void OnPhotosSaveClicked(object sender, RoutedEventArgs e)
+    {
+        var chosen = PhotosGrid.SelectedItems.OfType<PhotoTile>().ToList();
+        if (chosen.Count == 0) return;
+        PhotosSaveButton.IsEnabled = false;
+        string? last = null;
+        string? problem = null;
+        var saved = 0;
+        foreach (var tile in chosen)
+        {
+            PhotosStatusText.Text = $"Saving {saved + 1} of {chosen.Count}…";
+            var result = await _photos.FetchAsync(tile.Info.Id);
+            if (result.Status == PhotoStatus.Ok) { saved++; last = result.SavedPath; }
+            else problem = PhotoBrowser.Explain(result.Status);
+            if (result.Status is PhotoStatus.Unavailable or PhotoStatus.Disabled or PhotoStatus.NoPermission) break;
+        }
+        PhotosStatusText.Text = saved == chosen.Count
+            ? $"Saved {saved} photo{(saved == 1 ? "" : "s")} to {_downloadDir}"
+            : $"Saved {saved} of {chosen.Count}. {problem}";
+        PhotosSaveButton.IsEnabled = PhotosGrid.SelectedItems.Count > 0;
+        if (last is not null)
+            try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{last}\"") { UseShellExecute = true }); } catch (Exception) { }
+    }
+
+    private async void OnPhotosOpenClicked(object sender, RoutedEventArgs e) => await OpenPhotoAsync(PhotosGrid.SelectedItem as PhotoTile);
+
+    private async void OnPhotosDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e) =>
+        await OpenPhotoAsync((e.OriginalSource as FrameworkElement)?.DataContext as PhotoTile ?? PhotosGrid.SelectedItem as PhotoTile);
+
+    private async Task OpenPhotoAsync(PhotoTile? tile)
+    {
+        if (tile is null) return;
+        PhotosStatusText.Text = "Getting the photo…";
+        var result = await _photos.FetchAsync(tile.Info.Id);
+        if (result.Status != PhotoStatus.Ok || result.SavedPath is null) { PhotosStatusText.Text = PhotoBrowser.Explain(result.Status); return; }
+        PhotosStatusText.Text = $"Saved to {result.SavedPath}";
+        try { Process.Start(new ProcessStartInfo(result.SavedPath) { UseShellExecute = true }); } catch (Exception) { }
     }
 
     // ------------------------------------------------------------------ recent transfers
