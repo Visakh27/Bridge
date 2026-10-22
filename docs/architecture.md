@@ -53,6 +53,12 @@ Bridge.Security ────────┤    platform)         ├────
   `PhotoBrowser` (request/answer matching, preview cache, waiting for a
   fetched original's transfer); Bridge.Windows' Photos view is a thumbnail
   grid over it.
+- **File Explorer** — `Bridge.Core` `LaunchArguments` (Windows command-line
+  splitting, `--send` paths) and `ExplorerSendQueue` (send now, or hold until
+  the phone reconnects, with expiry and cancel); Bridge.Windows'
+  `ExplorerIntegration` adds the Send to shortcut and the Quick access pin,
+  and `App` routes Send to (first launch or a redirected second launch) and
+  Share activations to the queue.
 - **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
   `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
   `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and

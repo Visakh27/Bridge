@@ -13,8 +13,8 @@ android {
         applicationId = "com.bridge.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0" // keep in step with windows/Bridge.Windows (Version, Package.appxmanifest)
+        versionCode = 3
+        versionName = "0.3.0" // keep in step with windows/Bridge.Windows (Version, Package.appxmanifest)
     }
 
     buildFeatures {

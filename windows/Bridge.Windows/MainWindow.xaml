@@ -136,6 +136,11 @@
                     <Button Content="Change folder…" Click="OnChangeFolderClicked" />
                     <Button x:Name="ResetFolderButton" Content="Use Downloads\Bridge" Click="OnResetFolderClicked" />
                 </StackPanel>
+                <ToggleSwitch x:Name="QuickAccessToggle" Header="Pin the received-files folder to Quick access in File Explorer" Toggled="OnSettingToggled" />
+
+                <TextBlock Text="File Explorer" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="SendToToggle" Header="Show Bridge in Explorer's Send to menu" Toggled="OnSettingToggled" />
+                <TextBlock x:Name="ShareHintText" TextWrapping="Wrap" FontSize="12" Opacity="0.6" />
 
                 <TextBlock Text="Starting Bridge" FontWeight="SemiBold" Margin="0,8,0,0" />
                 <ToggleSwitch x:Name="StartWithWindowsToggle" Header="Start Bridge when I sign in to Windows" Toggled="OnSettingToggled" />

@@ -17,7 +17,7 @@
   xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap5 com desktop desktop2 rescap">
-  <Identity Name="Bridge.App" Publisher="CN=Bridge Dev" Version="0.2.0.0" />
+  <Identity Name="Bridge.App" Publisher="CN=Bridge Dev" Version="0.3.0.0" />
   <Properties>
     <DisplayName>Bridge</DisplayName>
     <PublisherDisplayName>Bridge</PublisherDisplayName>
@@ -54,6 +54,15 @@
             </com:ExeServer>
           </com:ComServer>
         </com:Extension>
+        <!-- File Explorer › right-click › Share › Bridge: send files and folders to the phone (unpackaged builds use Send to). -->
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget Description="Send to your phone">
+            <uap:SupportedFileTypes>
+              <uap:SupportsAnyFileType />
+            </uap:SupportedFileTypes>
+            <uap:DataFormat>StorageItems</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
         <!-- Settings › "Start Bridge when I sign in" (off until the user turns it on; StartupRegistration.TaskId). -->
         <uap5:Extension Category="windows.startupTask" Executable="Bridge.Windows.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:StartupTask TaskId="BridgeStartup" Enabled="false" DisplayName="Bridge" />

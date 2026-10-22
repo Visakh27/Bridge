@@ -37,6 +37,8 @@ public sealed partial class MainWindow : Window
     private readonly DiagnosticsLog _diagnostics;
     private readonly TransferHistory _history = new();
     private readonly PhotoBrowser _photos;
+    private readonly ExplorerSendQueue _explorerSend;
+    private const string SendToastTag = "explorer-send";
     private readonly System.Collections.ObjectModel.ObservableCollection<PhotoTile> _photoTiles = [];
     private string? _photoCursor;
     private bool _photosStale = true;
@@ -73,6 +75,24 @@ public sealed partial class MainWindow : Window
             if (PhotosPanel.Visibility == Visibility.Visible) _ = ReloadPhotosAsync(); else _photosStale = true;
         });
         PhotosGrid.ItemsSource = _photoTiles;
+        _explorerSend = new ExplorerSendQueue(_host);
+        _explorerSend.Queued += (_, waiting) =>
+        {
+            _diagnostics.Info("explorer.queued", LogField.Num("items", waiting));
+            ShowSendToast($"Your phone isn't connected. Bridge will send {Items(waiting)} when it reconnects (within {(int)_explorerSend.Wait.TotalMinutes} minutes).", cancel: true);
+        };
+        _explorerSend.Started += (request, phone) => ShowSendToast($"Sending {Items(request.Count)} to {phone}…");
+        _explorerSend.Finished += summary =>
+        {
+            _diagnostics.Info("explorer.sent", LogField.Num("total", summary.Total), LogField.Num("sent", summary.Sent),
+                LogField.Num("failed", summary.Failed), LogField.Num("interrupted", summary.Interrupted), LogField.Flag("queued", summary.WasQueued));
+            ShowSendToast(ExplorerSendQueue.Describe(summary));
+        };
+        _explorerSend.Expired += request =>
+        {
+            _diagnostics.Info("explorer.expired", LogField.Num("items", request.Count));
+            ShowSendToast($"Your phone didn't reconnect, so {Items(request.Count)} weren't sent. Send them again from File Explorer.");
+        };
         _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos);
         _diagnostics.Info("app.started", LogField.Version("version", typeof(MainWindow).Assembly.GetName().Version),
             LogField.Version("os", Environment.OSVersion.Version), LogField.Flag("packaged", StartupRegistration.IsPackaged));
@@ -81,6 +101,8 @@ public sealed partial class MainWindow : Window
         _history.Changed += QueueRenderRecent;
         ApplySettingsToUi();
         ShowOnboardingIfNeeded();
+        // Send to: added once the first-run guide is done, refreshed each start (the app may have moved).
+        if (_settings.Current.OnboardingDone && _settings.Current.SendToMenu) _ = Task.Run(() => ExplorerIntegration.SetSendTo(true));
         // Unpackaged: re-point the sign-in entry at this copy of Bridge (it may have been moved or updated).
         if (_settings.Current.StartWithWindows && !StartupRegistration.IsPackaged) _ = StartupRegistration.SetAsync(true);
         _host.DevicePaired += device => DispatcherQueue.TryEnqueue(() =>
@@ -368,6 +390,12 @@ public sealed partial class MainWindow : Window
     public async void OnToastInvoked(IDictionary<string, string> arguments, IDictionary<string, string> userInput)
     {
         var command = NotificationToastCommand.Parse(arguments);
+        if (command.Kind == NotificationToastCommand.CancelSend)
+        {
+            var dropped = _explorerSend.CancelPending();
+            ShowSendToast(dropped > 0 ? $"Cancelled: {Items(dropped)} won't be sent." : "There was nothing waiting to send.");
+            return;
+        }
         if (command.Kind == NotificationToastCommand.Open)
         {
             DispatcherQueue.TryEnqueue(App.ShowMainWindow);
@@ -379,6 +407,49 @@ public sealed partial class MainWindow : Window
         string appName = "the app";
         if (command.Key is not null) lock (AppNames) { if (AppNames.TryGetValue(command.Key, out var n)) appName = n; }
         if (command.FailureMessage(status, appName) is { } message) ShowInfo(message);
+    }
+
+    // ------------------------------------------------------------------ Explorer (Send to / Share)
+
+    private static string Items(int n) => n == 1 ? "1 item" : $"{n} items";
+
+    /// <summary>Files and folders handed over by File Explorer (Send to, Share) or a second launch.</summary>
+    public void HandleSendRequest(SendRequest request)
+    {
+        _ = Task.Run(async () =>
+        {
+            if (request.Count == 0)
+            {
+                ShowSendToast(request.Skipped.Count > 0 ? "Bridge couldn't find those files." : "Nothing to send.");
+                return;
+            }
+            if (request.Skipped.Count > 0) ShowSendToast($"{Items(request.Skipped.Count)} couldn't be found and won't be sent.");
+            try { await _explorerSend.SubmitAsync(request, _cts.Token); }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    /// <summary>One notification for the current Explorer send, updated in place.</summary>
+    private static void ShowSendToast(string message, bool cancel = false)
+    {
+        try
+        {
+            var builder = new AppNotificationBuilder()
+                .AddArgument("bridge", NotificationToastCommand.Open)
+                .AddText("Bridge")
+                .AddText(message);
+            if (cancel)
+            {
+                var button = new AppNotificationButton("Cancel");
+                foreach (var (k, v) in new NotificationToastCommand(NotificationToastCommand.CancelSend).ToArguments()) button.AddArgument(k, v);
+                builder.AddButton(button);
+            }
+            var toast = builder.BuildNotification();
+            toast.Tag = SendToastTag;
+            toast.Group = "bridge-explorer";
+            AppNotificationManager.Default.Show(toast);
+        }
+        catch (Exception) { }
     }
 
     private static void ShowInfo(string message)
@@ -408,6 +479,7 @@ public sealed partial class MainWindow : Window
     {
         _settings.Update(s => s with { OnboardingDone = true });
         ShowOnboardingIfNeeded();
+        if (_settings.Current.SendToMenu) _ = Task.Run(() => ExplorerIntegration.SetSendTo(true));
     }
 
     // ------------------------------------------------------------------ settings
@@ -427,6 +499,12 @@ public sealed partial class MainWindow : Window
             DiagnosticsToggle.IsOn = s.Diagnostics;
             SaveReportButton.IsEnabled = s.Diagnostics;
             ClipboardToggle.IsOn = s.ClipboardSync;
+            QuickAccessToggle.IsOn = s.QuickAccessPin;
+            SendToToggle.IsOn = s.SendToMenu;
+            SendToToggle.Visibility = StartupRegistration.IsPackaged ? Visibility.Collapsed : Visibility.Visible;
+            ShareHintText.Text = StartupRegistration.IsPackaged
+                ? "In File Explorer, right-click files or folders and choose Share › Bridge to send them to your phone."
+                : "In File Explorer, right-click files or folders and choose Send to › Bridge (your phone).";
             _diagnostics.Enabled = s.Diagnostics;
             VersionText.Text = $"Bridge {AppVersion}{(StartupRegistration.IsPackaged ? "" : " (unpackaged)")}";
         }
@@ -466,6 +544,18 @@ public sealed partial class MainWindow : Window
             if (!ok && want) SettingsMessageText.Text = "Windows didn't allow Bridge to start at sign-in. You can turn it on in Settings › Apps › Startup.";
             _settings.Update(s => s with { StartWithWindows = want && ok });
         }
+        else if (ReferenceEquals(sender, SendToToggle))
+        {
+            var want = SendToToggle.IsOn;
+            if (!ExplorerIntegration.SetSendTo(want)) SettingsMessageText.Text = "Couldn't change Explorer's Send to menu.";
+            _settings.Update(s => s with { SendToMenu = want });
+        }
+        else if (ReferenceEquals(sender, QuickAccessToggle))
+        {
+            var want = QuickAccessToggle.IsOn;
+            if (!ExplorerIntegration.SetQuickAccessPin(_downloadDir, want)) SettingsMessageText.Text = "Couldn't change Quick access.";
+            _settings.Update(s => s with { QuickAccessPin = want });
+        }
         else if (ReferenceEquals(sender, DiagnosticsToggle))
         {
             var on = DiagnosticsToggle.IsOn;
@@ -499,7 +589,9 @@ public sealed partial class MainWindow : Window
                 return;
             }
             Directory.CreateDirectory(folder.Path);
+            var old = _downloadDir;
             _settings.Update(s => s with { DownloadFolder = folder.Path });
+            MoveQuickAccessPin(old);
             ApplySettingsToUi();
         }
         catch (Exception ex)
@@ -509,9 +601,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>The received-files folder moved: move its Quick access pin with it.</summary>
+    private void MoveQuickAccessPin(string oldFolder)
+    {
+        if (!_settings.Current.QuickAccessPin || string.Equals(oldFolder, _downloadDir, StringComparison.OrdinalIgnoreCase)) return;
+        ExplorerIntegration.SetQuickAccessPin(oldFolder, false);
+        ExplorerIntegration.SetQuickAccessPin(_downloadDir, true);
+    }
+
     private void OnResetFolderClicked(object sender, RoutedEventArgs e)
     {
+        var old = _downloadDir;
         _settings.Update(s => s with { DownloadFolder = null });
+        MoveQuickAccessPin(old);
         ApplySettingsToUi();
     }
 

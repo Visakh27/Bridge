@@ -18,6 +18,10 @@ public sealed record BridgeSettings
     public bool ClipboardSync { get; init; }
     /// <summary>Keep a diagnostics log (metadata only).</summary>
     public bool Diagnostics { get; init; } = true;
+    /// <summary>"Bridge (your phone)" in Explorer's Send to menu (unpackaged; MSIX uses the Share menu).</summary>
+    public bool SendToMenu { get; init; } = true;
+    /// <summary>The received-files folder is pinned to Explorer's Quick access.</summary>
+    public bool QuickAccessPin { get; init; }
     /// <summary>The first-run guide has been seen.</summary>
     public bool OnboardingDone { get; init; }
 }
