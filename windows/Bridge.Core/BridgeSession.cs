@@ -39,6 +39,8 @@ public sealed class BridgeSession : IAsyncDisposable
     public event Action<string>? NotificationDismissed; // notification key
     /// <summary>photos.page / photos.thumbnail / photos.fetched / photos.changed from the phone (see <see cref="PhotoBrowser"/>).</summary>
     public event Action<BridgeMessage>? PhotosMessage;
+    /// <summary>handoff.open / handoff.ack from the phone (see <see cref="HandoffService"/>).</summary>
+    public event Action<BridgeMessage>? HandoffMessage;
     public event Action<ConnectedDevice>? StatusChanged;
     public event Action<ErrorPayload>? PeerError;
     /// <summary>Diagnostics: a handler threw for a message of this type (payload contents are never included).</summary>
@@ -213,6 +215,10 @@ public sealed class BridgeSession : IAsyncDisposable
             case MessageType.NotificationDismiss:
                 if (message.PayloadAs<NotificationDismissPayload>().Key is { Length: > 0 } dismissedKey)
                     NotificationDismissed?.Invoke(dismissedKey);
+                break;
+            case MessageType.HandoffOpen:
+            case MessageType.HandoffAck:
+                HandoffMessage?.Invoke(message);
                 break;
             case MessageType.PhotosPage:
             case MessageType.PhotosThumbnail:

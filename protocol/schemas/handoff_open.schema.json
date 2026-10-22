@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HandoffPayload",
+  "description": "Either side -> the other: a web link to offer (kind 'url') or text for the clipboard (kind 'text').",
+  "type": "object",
+  "required": [
+    "id",
+    "kind"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "url",
+        "text"
+      ]
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^\\s@/?#]+([/?#][^\\s]*)?$",
+      "maxLength": 2048
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "url"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "url"
+        ],
+        "not": {
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "text"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "url"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "title"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

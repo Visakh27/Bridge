@@ -28,5 +28,7 @@ object MessageType {
     const val PHOTOS_FETCH = "photos.fetch"
     const val PHOTOS_FETCHED = "photos.fetched"
     const val PHOTOS_CHANGED = "photos.changed"
+    const val HANDOFF_OPEN = "handoff.open"
+    const val HANDOFF_ACK = "handoff.ack"
     const val ERROR = "error"
 }

@@ -18,6 +18,10 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
     public const string Mute = "mute";
     /// <summary>Drop what Explorer handed over while the phone was away (the "waiting to send" toast).</summary>
     public const string CancelSend = "cancel-send";
+    /// <summary>Open the link the phone handed over (Key = the URL, checked again before use).</summary>
+    public const string OpenLink = "open-link";
+    /// <summary>Copy the link the phone handed over (Key = the URL).</summary>
+    public const string CopyLink = "copy-link";
 
     /// <summary>Id of the toast's reply text box.</summary>
     public const string ReplyInputId = "reply";
@@ -47,6 +51,8 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
             Dismiss when !string.IsNullOrEmpty(key) => new(kind, key),
             Mute when !string.IsNullOrEmpty(app) => new(kind, AppId: app),
             CancelSend => new(kind),
+            // Toast arguments can come back from anywhere that can activate Bridge: the URL is checked again.
+            OpenLink or CopyLink when key is not null && HandoffRules.CheckUrl(key) is not null => new(kind, key),
             _ => new(Open),
         };
     }

@@ -14,7 +14,7 @@ public sealed class BridgeDiagnostics
     private readonly DiagnosticsLog _log;
 
     public BridgeDiagnostics(DiagnosticsLog log, BridgeHost host, FileTransferService files, NotificationActionRouter? notificationActions = null,
-        PhotoBrowser? photos = null)
+        PhotoBrowser? photos = null, HandoffService? handoff = null)
     {
         _log = log;
         host.DevicePaired += d => _log.Info("pair.accepted", LogField.Id("peer", d.DeviceId, _log));
@@ -31,6 +31,9 @@ public sealed class BridgeDiagnostics
                 if (kind == "thumb" && status == PhotoStatus.Ok) return;
                 _log.Info("photos.request", LogField.Code("kind", kind), LogField.Code("status", status));
             };
+        if (handoff is not null)
+            handoff.Completed += (dir, kind, status) =>
+                _log.Info("handoff", LogField.Code("dir", dir), LogField.Code("kind", kind), LogField.Code("status", status));
     }
 
     /// <summary>Known message types logged with '_' instead of '.'; anything else is "unknown".</summary>
