@@ -152,3 +152,41 @@ public static class PhotoStatus
     /// <summary>Local only (never on the wire): no answer, or no connected phone with photos.</summary>
     public const string Unavailable = "unavailable";
 }
+
+/// <summary>
+/// Handoff: a link (<see cref="Kind"/> "url": <see cref="Url"/>, optional <see cref="Title"/>) or a piece of text
+/// ("text": <see cref="Text"/>) to continue with on the other device. Answered by handoff.ack with the same id.
+/// </summary>
+public sealed record HandoffPayload(string Id, string Kind)
+{
+    public string? Url { get; init; }
+    public string? Title { get; init; }
+    public string? Text { get; init; }
+}
+
+/// <summary>Outcome of a handoff (see <see cref="HandoffStatus"/>).</summary>
+public sealed record HandoffAckPayload(string Id, string Status);
+
+public static class HandoffKind
+{
+    public const string Url = "url";
+    public const string Text = "text";
+}
+
+public static class HandoffStatus
+{
+    /// <summary>A notification offers to open the link.</summary>
+    public const string Shown = "shown";
+    /// <summary>The link was opened (only where the user allowed it).</summary>
+    public const string Opened = "opened";
+    /// <summary>The text is now on the clipboard.</summary>
+    public const string Copied = "copied";
+    /// <summary>The receiving side has handoff turned off.</summary>
+    public const string Disabled = "disabled";
+    /// <summary>Not an http(s) link, a link with a password in it, too long, empty…</summary>
+    public const string Invalid = "invalid";
+    /// <summary>Too many in a short time.</summary>
+    public const string Busy = "busy";
+    /// <summary>Local only: not sent (no phone, or it doesn't support handoff) or no answer.</summary>
+    public const string Unavailable = "unavailable";
+}

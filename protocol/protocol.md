@@ -129,7 +129,7 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 |---|---|---|
 | `pairing.request` | A→W | `{"pairingToken","deviceName","publicKeyBase64"}` (phone identity key) |
 | `pairing.accept` / `pairing.reject` | W→A | `{"deviceName","publicKeyBase64"}` / `{"reason"}` |
-| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions","photos"]}` |
+| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions","photos","handoff"]}` |
 | `presence.ping` / `presence.pong` | both | `{}` — keep-alive; each side pings every 15 s and drops the connection after 45 s of silence |
 | `device.status` | A→W | `{"batteryPercent","charging","connectionQuality"}` |
 | `clipboard.update` | both | `{"format":"text","data":"..."}` (≤ 10,000 chars) |
@@ -148,6 +148,8 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 | `photos.thumb` / `photos.thumbnail` | W→A / A→W | `{"requestId","id"}` / `{"requestId","id","status","mime"?,"data"?}` |
 | `photos.fetch` / `photos.fetched` | W→A / A→W | `{"requestId","id"}` / `{"requestId","id","status","transferId"?}` |
 | `photos.changed` | A→W | `{}` — the phone's photos changed; refresh |
+| `handoff.open` | both | `{"id","kind":"url"|"text","url"?,"title"?,"text"?}` (see Handoff) |
+| `handoff.ack` | both | `{"id","status"}` — `shown`, `opened`, `copied`, `disabled`, `invalid`, `busy` |
 | `error` | both | `{"code","message"}` — see docs/architecture.md error codes |
 
 ## Versioning
@@ -284,3 +286,29 @@ such a PC). Schemas: `photos_*.schema.json`.
   checks previews (JPEG marker, size) and items (digit ids) before use.
 - `photos.changed` is sent at most once per 2 s of quiet after the phone's
   library changes.
+
+## Handoff (`handoff`)
+
+Either side advertises `handoff` when it accepts links and text; a side sends
+`handoff.open` only to a peer that advertised it. Schemas: `handoff_*.schema.json`.
+
+- `kind: "url"` carries `url` (and optionally `title`, ≤ 200 chars, for
+  display only); `kind: "text"` carries `text` (1–10,000 chars). `id` (1–64
+  chars, unique per sender) ties the answer to the request.
+- Links must be absolute `http` or `https` URLs of at most 2048 characters,
+  with a host, without user info (`user:pass@`), whitespace or control
+  characters. Anything else is answered `invalid` and never opened —
+  `javascript:`, `file:`, `intent:`, `ms-settings:` and similar schemes in
+  particular. Receivers check again on their own side, display the host
+  (international names as punycode), and strip control and bidi-override
+  characters from titles.
+- The receiver answers every `handoff.open` with `handoff.ack`:
+  `shown` (a notification offers to open the link), `opened` (opened at once;
+  only on the PC, and only when the user turned that on), `copied` (text is
+  on the clipboard), `disabled` (the user turned handoff off), `invalid`, or
+  `busy` (more than 20 in a minute). A repeated `id` gets the same answer and
+  nothing is shown twice. The phone never opens a link by itself.
+- The sender waits up to 10 s for the answer; a status it doesn't know counts
+  as `invalid`. Handoffs are not queued while disconnected.
+- Diagnostics record only direction, kind and status — never the link or text.
+

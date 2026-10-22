@@ -114,6 +114,8 @@ object Features {
     const val NOTIFICATIONS = "notifications"
     /** The PC can browse this phone's photos (photos.*). */
     const val PHOTOS = "photos"
+    /** Links and text handed from one device to the other (handoff.*). */
+    const val HANDOFF = "handoff"
     /** Interrupted transfers continue where they stopped (file.resume). */
     const val FILES_RESUME = "files.resume"
     /** Folder transfers (file.start relativePath / batch fields). */
@@ -162,4 +164,22 @@ object PhotoStatus {
     const val BUSY = "busy"
     const val INVALID = "invalid"
     const val ERROR = "error"
+}
+
+/** Handoff: a link ([kind] "url": [url], optional [title]) or text ("text": [text]). Answered by handoff.ack with the same id. */
+@Serializable data class HandoffPayload(val id: String, val kind: String, val url: String? = null, val title: String? = null, val text: String? = null)
+
+@Serializable data class HandoffAckPayload(val id: String, val status: String)
+
+object HandoffKind { const val URL = "url"; const val TEXT = "text" }
+
+object HandoffStatus {
+    const val SHOWN = "shown"
+    const val OPENED = "opened"
+    const val COPIED = "copied"
+    const val DISABLED = "disabled"
+    const val INVALID = "invalid"
+    const val BUSY = "busy"
+    /** Local only: not sent (no PC, or it doesn't support handoff) or no answer. */
+    const val UNAVAILABLE = "unavailable"
 }

@@ -2,6 +2,7 @@ package com.bridge.app.network
 
 import com.bridge.app.notifications.NotificationCommandHandler
 import com.bridge.app.photos.PhotoRequestHandler
+import com.bridge.app.handoff.HandoffHandler
 import com.bridge.app.protocol.*
 import com.bridge.app.security.IdentityKey
 import java.io.File
@@ -43,6 +44,8 @@ class BridgeClientSession(
     private val notifications: NotificationCommandHandler? = null,
     /** Answers the PC's photos.* requests; null = not offered. */
     private val photos: PhotoRequestHandler? = null,
+    /** Links and text from the PC, and answers to ours; null = not offered. */
+    private val handoff: HandoffHandler? = null,
 ) : SessionHandle {
     interface Listener {
         fun onConnected(peerFeatures: List<String>) {}
@@ -57,7 +60,8 @@ class BridgeClientSession(
 
     /** What this phone advertises: notification actions only when something can carry them out. */
     val localFeatures: List<String> = LOCAL_FEATURES +
-        listOfNotNull(Features.NOTIFICATIONS_ACTIONS.takeIf { notifications != null }, Features.PHOTOS.takeIf { photos != null })
+        listOfNotNull(Features.NOTIFICATIONS_ACTIONS.takeIf { notifications != null }, Features.PHOTOS.takeIf { photos != null },
+            Features.HANDOFF.takeIf { handoff != null })
 
     @Volatile private var channel: EncryptedChannel? = null
     @Volatile private var lastSeen = System.currentTimeMillis()
@@ -170,6 +174,7 @@ class BridgeClientSession(
             MessageType.PRESENCE_PONG -> Unit // lastSeen already updated
             MessageType.NOTIFICATION_ACTION, MessageType.NOTIFICATION_DISMISS, MessageType.NOTIFICATION_MUTE ->
                 notifications?.handleIncoming(message) { ch.send(it) }
+            MessageType.HANDOFF_OPEN, MessageType.HANDOFF_ACK -> handoff?.handleIncoming(message) { ch.send(it) }
             MessageType.PHOTOS_LIST, MessageType.PHOTOS_THUMB, MessageType.PHOTOS_FETCH ->
                 photos?.handleIncoming(message, { ch.send(it) }) { file, name, transferId ->
                     // Resumable like any send; the private copy is deleted once it's done.

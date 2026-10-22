@@ -160,6 +160,39 @@ class BridgeConnectionService : Service() {
             dismissals.forEach { service.queueNotificationMessage(s, BridgeMessage.create(MessageType.NOTIFICATION_DISMISS, it)) }
         }
 
+        /**
+         * Text another app shared to Bridge: a link opens on the PC (as the PC's settings allow),
+         * other text goes on the PC's clipboard. [onResult] gets a message for the user.
+         */
+        fun handoffShared(context: Context, text: String?, subject: String?, onResult: (String) -> Unit) {
+            val app = context.applicationContext as BridgeApplication
+            val s = instance?.session
+            if (s == null || !s.peerSupports(Features.HANDOFF)) {
+                onResult(if (s == null) "Bridge isn't connected to your PC right now." else "Update Bridge on your PC to send links and text.")
+                return
+            }
+            instance!!.scope.launch {
+                val status = app.handoffInbox.sendShared(text, subject) { s.send(it) }
+                onResult(when (status) {
+                    HandoffStatus.OPENED -> "Opened on your PC."
+                    HandoffStatus.SHOWN -> "Sent to your PC."
+                    HandoffStatus.COPIED -> "Copied to your PC's clipboard."
+                    HandoffStatus.DISABLED -> "Your PC isn't accepting links and text (Bridge Settings on the PC)."
+                    HandoffStatus.INVALID -> "Bridge can send web links (http or https) and text up to 10,000 characters."
+                    HandoffStatus.BUSY -> "Too many at once. Try again in a minute."
+                    else -> "Couldn't reach your PC. Try again."
+                })
+            }
+        }
+
+        /** Handoff text from the PC onto the clipboard without clipboard sync echoing it back; false if not running. */
+        fun writeClipboardFromPc(text: String): Boolean {
+            val service = instance ?: return false
+            if (!service::clipboardSync.isInitialized) return false
+            service.clipboardSync.writeFromPeer(text)
+            return true
+        }
+
         /** Photos were turned on/off or access changed: the PC refreshes its Photos view. */
         fun photosSettingChanged(context: Context) {
             val app = context.applicationContext as BridgeApplication
@@ -250,6 +283,7 @@ class BridgeConnectionService : Service() {
                     statusProvider = ::currentStatus,
                     notifications = app.notificationMirror,
                     photos = app.photoService,
+                    handoff = app.handoffInbox,
                 ).also { session = it }
             },
             listener = object : ReconnectLoop.Listener {

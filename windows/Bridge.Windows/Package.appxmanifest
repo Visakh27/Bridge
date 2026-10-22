@@ -17,7 +17,7 @@
   xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap5 com desktop desktop2 rescap">
-  <Identity Name="Bridge.App" Publisher="CN=Bridge Dev" Version="0.3.0.0" />
+  <Identity Name="Bridge.App" Publisher="CN=Bridge Dev" Version="0.4.0.0" />
   <Properties>
     <DisplayName>Bridge</DisplayName>
     <PublisherDisplayName>Bridge</PublisherDisplayName>
@@ -61,6 +61,8 @@
               <uap:SupportsAnyFileType />
             </uap:SupportedFileTypes>
             <uap:DataFormat>StorageItems</uap:DataFormat>
+            <uap:DataFormat>WebLink</uap:DataFormat>
+            <uap:DataFormat>Text</uap:DataFormat>
           </uap:ShareTarget>
         </uap:Extension>
         <!-- Settings › "Start Bridge when I sign in" (off until the user turns it on; StartupRegistration.TaskId). -->

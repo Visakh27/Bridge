@@ -48,6 +48,15 @@ class ClipboardSyncClient(private val clipboard: ClipboardAccess, private val sc
         }
     }
 
+    /**
+     * Puts text the PC handed over another way (handoff) on the clipboard without
+     * clipboard sync sending it straight back. Works whether or not sync is on.
+     */
+    fun writeFromPeer(text: String) {
+        synchronized(lock) { lastSynced = text }
+        clipboard.writeText(text)
+    }
+
     fun handleIncoming(message: BridgeMessage) {
         if (!enabled) return
         val payload = message.payloadAs<ClipboardUpdatePayload>()

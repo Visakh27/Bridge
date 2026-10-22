@@ -101,8 +101,28 @@
    Bridge's private cache to send it. If the send fails, the copy is kept (at
    most 24 h, or until "Clear" in Recent transfers) so it can be retried;
    a cancelled send's copy is deleted at once.
+15. **Links and text (handoff)** — only a paired, connected peer can hand
+   over a link or text, and each side can turn receiving off (on by default).
+   Links must be plain `http`/`https` URLs (≤ 2048 chars) with a host and no
+   user info; `javascript:`, `file:`, `intent:`, `ms-settings:` and every
+   other scheme are refused on both the sending and receiving side, and
+   toast-button arguments are checked again before a link is opened, since
+   anything on the PC can activate Bridge with arguments. Both sides rebuild
+   the link around its ASCII (punycode) host, show that host, and open exactly
+   that. The phone never opens a link by itself: it shows a notification, and
+   the link opens only through a browser-capable app when the user taps it.
+   The PC also offers links in a notification unless the user turns on
+   "Open links right away". Titles lose control and bidi-override
+   characters. Text goes on the clipboard (up to 10,000 chars) without being
+   synced back. A peer may hand over at most 20 a minute; repeats of the same
+   request are answered without acting twice. Logs record direction, kind
+   and outcome only, never the link or text.
 
 ## Known limits (MVP)
+
+- A handed-over link is still a link to any web site: Bridge checks its form,
+  not its destination. The notification shows the real host so the user can
+  judge it before opening.
 
 - Discovery only works where the network passes UDP broadcast between
   devices; networks with client isolation (some guest/hotel Wi-Fi) block it,

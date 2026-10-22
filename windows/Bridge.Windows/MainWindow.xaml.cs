@@ -38,6 +38,9 @@ public sealed partial class MainWindow : Window
     private readonly TransferHistory _history = new();
     private readonly PhotoBrowser _photos;
     private readonly ExplorerSendQueue _explorerSend;
+    private readonly HandoffService _handoff;
+    private readonly WindowsClipboardAccess _clipboardAccess;
+    private const string HandoffToastGroup = "bridge-handoff";
     private const string SendToastTag = "explorer-send";
     private readonly System.Collections.ObjectModel.ObservableCollection<PhotoTile> _photoTiles = [];
     private string? _photoCursor;
@@ -65,7 +68,8 @@ public sealed partial class MainWindow : Window
         var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "identity.bin"));
         var store = new JsonPairedDeviceStore(Path.Combine(dataDir, "paired_devices.json"));
         _pairing = new PairingService(identity, store, Environment.MachineName);
-        _clipboard = new ClipboardSyncService(new WindowsClipboardAccess(DispatcherQueue));
+        _clipboardAccess = new WindowsClipboardAccess(DispatcherQueue);
+        _clipboard = new ClipboardSyncService(_clipboardAccess);
         _listener = new TcpBridgeListener(); // fixed port so paired phones can find us again
         _host = new BridgeHost(identity, store, _pairing, _fileTransfer, _clipboard, _downloadDir);
         _notificationActions = new NotificationActionRouter(_host);
@@ -93,7 +97,22 @@ public sealed partial class MainWindow : Window
             _diagnostics.Info("explorer.expired", LogField.Num("items", request.Count));
             ShowSendToast($"Your phone didn't reconnect, so {Items(request.Count)} weren't sent. Send them again from File Explorer.");
         };
-        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos);
+        _handoff = new HandoffService(_host, () => _settings.Current.ReceiveHandoff, () => _settings.Current.OpenLinksAutomatically);
+        _handoff.LinkReceived += (link, open, phone) =>
+        {
+            if (open) OpenLink(link.Url);
+            else ShowLinkToast(link, phone);
+        };
+        _handoff.TextReceived += (text, phone) => _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _clipboard.WriteFromPeerAsync(text);
+                ShowHandoffToast($"Copied from {phone}", HandoffRules.Preview(text));
+            }
+            catch (Exception) { ShowHandoffToast($"Text from {phone}", "Couldn't put it on the clipboard (another app is using it). Try again from your phone."); }
+        });
+        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos, _handoff);
         _diagnostics.Info("app.started", LogField.Version("version", typeof(MainWindow).Assembly.GetName().Version),
             LogField.Version("os", Environment.OSVersion.Version), LogField.Flag("packaged", StartupRegistration.IsPackaged));
 
@@ -396,6 +415,18 @@ public sealed partial class MainWindow : Window
             ShowSendToast(dropped > 0 ? $"Cancelled: {Items(dropped)} won't be sent." : "There was nothing waiting to send.");
             return;
         }
+        if (command.Kind == NotificationToastCommand.OpenLink)
+        {
+            OpenLink(command.Key!); // Parse already re-checked it
+            return;
+        }
+        if (command.Kind == NotificationToastCommand.CopyLink)
+        {
+            // The link came from the phone: don't let clipboard sync send it back.
+            try { await _clipboard.WriteFromPeerAsync(command.Key!); }
+            catch (Exception) { ShowInfo("Couldn't copy the link (another app is using the clipboard)."); }
+            return;
+        }
         if (command.Kind == NotificationToastCommand.Open)
         {
             DispatcherQueue.TryEnqueue(App.ShowMainWindow);
@@ -407,6 +438,79 @@ public sealed partial class MainWindow : Window
         string appName = "the app";
         if (command.Key is not null) lock (AppNames) { if (AppNames.TryGetValue(command.Key, out var n)) appName = n; }
         if (command.FailureMessage(status, appName) is { } message) ShowInfo(message);
+    }
+
+    // ------------------------------------------------------------------ handoff (links and text)
+
+    /// <summary>Opens a checked http(s) link in the default browser; never anything else.</summary>
+    private void OpenLink(string url)
+    {
+        if (HandoffRules.CheckUrl(url) is not { } link) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link.Url) { UseShellExecute = true }); }
+        catch (Exception ex) { _diagnostics.Warn("handoff.open_failed", LogField.Error(ex)); ShowInfo("Windows couldn't open that link."); }
+    }
+
+    private static void ShowLinkToast(HandoffLink link, string phone)
+    {
+        try
+        {
+            var open = new AppNotificationButton("Open");
+            foreach (var (k, v) in new NotificationToastCommand(NotificationToastCommand.OpenLink, link.Url).ToArguments()) open.AddArgument(k, v);
+            var copy = new AppNotificationButton("Copy link");
+            foreach (var (k, v) in new NotificationToastCommand(NotificationToastCommand.CopyLink, link.Url).ToArguments()) copy.AddArgument(k, v);
+            var builder = new AppNotificationBuilder()
+                .AddText($"Link from {phone}")
+                .AddText(link.Title ?? link.Host)
+                .AddButton(open)
+                .AddButton(copy);
+            if (link.Title is not null) builder.AddText(link.Host); // the real destination, always visible
+            // A click on the toast body opens the link too.
+            foreach (var (k, v) in new NotificationToastCommand(NotificationToastCommand.OpenLink, link.Url).ToArguments()) builder.AddArgument(k, v);
+            var toast = builder.BuildNotification();
+            toast.Group = HandoffToastGroup;
+            AppNotificationManager.Default.Show(toast);
+        }
+        catch (Exception) { }
+    }
+
+    private static void ShowHandoffToast(string title, string message)
+    {
+        try
+        {
+            var toast = new AppNotificationBuilder().AddArgument("bridge", NotificationToastCommand.Open).AddText(title).AddText(message).BuildNotification();
+            toast.Group = HandoffToastGroup;
+            AppNotificationManager.Default.Show(toast);
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>Tray › "Send clipboard to phone": a lone link opens on the phone, other text goes on its clipboard.</summary>
+    public async Task SendClipboardToPhoneAsync()
+    {
+        string? text = null;
+        try { text = await _clipboardAccess.ReadTextAsync(); } catch (Exception) { }
+        if (string.IsNullOrWhiteSpace(text)) { ShowHandoffToast("Nothing to send", "The clipboard has no text or link."); return; }
+        string status;
+        try { status = await _handoff.SendClipboardAsync(text, _cts.Token); }
+        catch (OperationCanceledException) { return; }
+        ShowHandoffResult(status);
+    }
+
+    /// <summary>A link (url) or text shared to Bridge from another app (Share menu).</summary>
+    public async Task HandoffAsync(string? url, string? title, string? text)
+    {
+        string status;
+        try { status = url is not null ? await _handoff.SendUrlAsync(url, title, _cts.Token) : await _handoff.SendTextAsync(text ?? "", _cts.Token); }
+        catch (OperationCanceledException) { return; }
+        ShowHandoffResult(status);
+    }
+
+    private static void ShowHandoffResult(string status)
+    {
+        if (HandoffService.Explain(status) is { } problem) ShowHandoffToast("Not sent", problem);
+        else ShowHandoffToast("Sent to your phone", status == HandoffStatus.Copied
+            ? "It's on your phone's clipboard."
+            : "Tap the notification on your phone to open the link.");
     }
 
     // ------------------------------------------------------------------ Explorer (Send to / Share)
@@ -501,6 +605,9 @@ public sealed partial class MainWindow : Window
             ClipboardToggle.IsOn = s.ClipboardSync;
             QuickAccessToggle.IsOn = s.QuickAccessPin;
             SendToToggle.IsOn = s.SendToMenu;
+            ReceiveHandoffToggle.IsOn = s.ReceiveHandoff;
+            OpenLinksToggle.IsOn = s.OpenLinksAutomatically;
+            OpenLinksToggle.IsEnabled = s.ReceiveHandoff;
             SendToToggle.Visibility = StartupRegistration.IsPackaged ? Visibility.Collapsed : Visibility.Visible;
             ShareHintText.Text = StartupRegistration.IsPackaged
                 ? "In File Explorer, right-click files or folders and choose Share › Bridge to send them to your phone."
@@ -569,6 +676,8 @@ public sealed partial class MainWindow : Window
             {
                 StartMinimized = StartMinimizedToggle.IsOn,
                 ShowPhoneNotifications = ShowNotificationsToggle.IsOn,
+                ReceiveHandoff = ReceiveHandoffToggle.IsOn,
+                OpenLinksAutomatically = OpenLinksToggle.IsOn,
             });
         }
         ApplySettingsToUi();
@@ -632,6 +741,8 @@ public sealed partial class MainWindow : Window
                 LogField.Flag("start_with_windows", s.StartWithWindows),
                 LogField.Flag("show_notifications", s.ShowPhoneNotifications),
                 LogField.Flag("clipboard_sync", s.ClipboardSync),
+                LogField.Flag("receive_handoff", s.ReceiveHandoff),
+                LogField.Flag("open_links", s.OpenLinksAutomatically),
                 LogField.Flag("discovery", _discovery is not null));
             Directory.CreateDirectory(_downloadDir);
             var path = Path.Combine(_downloadDir, $"bridge-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
