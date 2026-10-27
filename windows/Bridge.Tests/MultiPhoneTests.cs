@@ -488,13 +488,19 @@ public sealed class MultiPhoneTests : IDisposable
         await using var a = await ConnectAsync(pixel, [Features.Files]);
         await using (var b = await ConnectAsync(galaxy, [Features.Files]))
         {
+            // The Galaxy becomes active as it connects; picking the Pixel before that is announced would
+            // (rightly) leave nothing to announce, since only the active phone as it is now is reported.
+            for (var i = 0; i < 200 && !log.Lines().Any(l => l.Contains("phone.active") && l.Contains("phones=2")); i++) await Task.Delay(10);
             _host.ActiveDeviceId = pixel.Id;
         }
         await WaitGone(galaxy.Id);
+        // The log's own "ended" handler runs after the host's: give it a moment.
+        for (var i = 0; i < 200 && !log.Lines().Any(l => l.Contains("session.ended")); i++) await Task.Delay(10);
         var lines = log.Lines();
-        Assert.Contains(lines, l => l.Contains("session.started") && l.Contains("phones=2"));
-        Assert.Contains(lines, l => l.Contains("phone.active") && l.Contains("phones=2"));
-        Assert.Contains(lines, l => l.Contains("session.ended") && l.Contains("phones=1"));
+        var dump = string.Join(" | ", lines.Select(l => l[(l.IndexOf(' ') + 1)..]));
+        Assert.True(lines.Any(l => l.Contains("session.started") && l.Contains("phones=2")), "started: " + dump);
+        Assert.True(lines.Any(l => l.Contains("phone.active") && l.Contains("phones=2")), "active: " + dump);
+        Assert.True(lines.Any(l => l.Contains("session.ended") && l.Contains("phones=1")), "ended: " + dump);
         foreach (var l in lines) Assert.False(l.Contains("ZEBRA") || l.Contains(pixel.Id) || l.Contains(galaxy.Id), l);
     }
 }
