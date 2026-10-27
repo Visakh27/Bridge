@@ -84,14 +84,26 @@ public sealed class BridgeHost : IAsyncDisposable
         get { lock (_gate) return _activeDeviceId; }
         set
         {
-            BridgeSession? before, after;
-            lock (_gate)
-            {
-                before = CurrentSession;
-                _activeDeviceId = value;
-                after = CurrentSession;
-            }
-            if (!ReferenceEquals(before, after)) ActiveSessionChanged?.Invoke(after);
+            lock (_gate) _activeDeviceId = value;
+            RaiseActiveChanged();
+        }
+    }
+
+    private readonly object _raiseGate = new();
+    private BridgeSession? _lastRaisedActive;
+
+    /// <summary>
+    /// Tells subscribers the active phone as it is <em>now</em>, once per change, in order — even when
+    /// a connect, a disconnect and the user's pick happen at the same moment on different threads.
+    /// </summary>
+    private void RaiseActiveChanged()
+    {
+        lock (_raiseGate)
+        {
+            var now = CurrentSession;
+            if (ReferenceEquals(now, _lastRaisedActive)) return;
+            _lastRaisedActive = now;
+            ActiveSessionChanged?.Invoke(now);
         }
     }
 
@@ -230,17 +242,14 @@ public sealed class BridgeHost : IAsyncDisposable
             var session = new BridgeSession(channel, device, _fileTransfer, _clipboard, () => DownloadDirectory);
             session.Ended += OnSessionEnded;
             if (previous is not null) await previous.DisposeAsync(); // ends it (and removes it) before the new one is listed
-            BridgeSession? activeBefore;
             lock (_gate)
             {
-                activeBefore = CurrentSession;
                 if (previous is not null) _sessions.Remove(previous);
                 _sessions.Add(session);
             }
             SessionStarted?.Invoke(session);
             session.Start();
-            var activeAfter = CurrentSession;
-            if (!ReferenceEquals(activeBefore, activeAfter)) ActiveSessionChanged?.Invoke(activeAfter);
+            RaiseActiveChanged();
         }
         finally
         {
@@ -251,16 +260,9 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnSessionEnded(BridgeSession session)
     {
-        BridgeSession? activeBefore, activeAfter;
-        bool removed;
-        lock (_gate)
-        {
-            activeBefore = CurrentSession;
-            removed = _sessions.Remove(session);
-            activeAfter = CurrentSession;
-        }
+        lock (_gate) _sessions.Remove(session);
         SessionEnded?.Invoke(session);
-        if (removed && !ReferenceEquals(activeBefore, activeAfter)) ActiveSessionChanged?.Invoke(activeAfter);
+        RaiseActiveChanged();
     }
 
     /// <summary>Forgets a paired device and drops its connection (docs/security.md, Revocation).</summary>

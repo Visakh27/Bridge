@@ -117,29 +117,67 @@ public sealed class MultiPhoneTests : IDisposable
         var galaxy = await PairAsync("Galaxy");
         var changes = new List<string?>();
         _host.ActiveSessionChanged += s => { lock (changes) changes.Add(s?.Device.DeviceName); };
+        // Events arrive on the thread that made the change: wait for each one before the next step.
+        async Task Saw(params string?[] expected)
+        {
+            for (var i = 0; i < 200; i++) { lock (changes) if (changes.Count >= expected.Length) break; await Task.Delay(10); }
+            lock (changes) Assert.True(changes.SequenceEqual(expected), string.Join(",", changes.Select(c => c ?? "-")));
+        }
 
         await using var a = await ConnectAsync(pixel);
         Assert.Equal("Pixel", _host.CurrentSession?.Device.DeviceName);
+        await Saw("Pixel");
         await using var b = await ConnectAsync(galaxy);
         Assert.Equal(2, _host.Sessions.Count);
         Assert.True(_host.SessionFor(pixel.Id)!.IsRunning);
         Assert.Equal("Galaxy", _host.CurrentSession?.Device.DeviceName); // most recently connected
+        await Saw("Pixel", "Galaxy");
 
         _host.ActiveDeviceId = pixel.Id;
         Assert.Equal("Pixel", _host.CurrentSession?.Device.DeviceName);
         _host.ActiveDeviceId = pixel.Id; // no change, no event
+        await Saw("Pixel", "Galaxy", "Pixel");
 
         // The picked phone leaves: the other one stands in; it comes back: it's active again.
         await a.DisposeAsync();
         await WaitGone(pixel.Id);
         Assert.Equal("Galaxy", _host.CurrentSession?.Device.DeviceName);
         Assert.Equal(pixel.Id, _host.ActiveDeviceId); // still the user's pick
+        await Saw("Pixel", "Galaxy", "Pixel", "Galaxy");
         await using var a2 = await ConnectAsync(pixel);
         Assert.Equal("Pixel", _host.CurrentSession?.Device.DeviceName);
+        await Saw("Pixel", "Galaxy", "Pixel", "Galaxy", "Pixel");
 
-        _host.ActiveDeviceId = null; // follow the most recent again
+        _host.ActiveDeviceId = null; // follow the most recent again: that's the Pixel, so nothing changes
         Assert.Equal("Pixel", _host.CurrentSession?.Device.DeviceName);
-        lock (changes) Assert.Equal(["Pixel", "Galaxy", "Pixel", "Galaxy", "Pixel"], changes);
+        await Task.Delay(100);
+        await Saw("Pixel", "Galaxy", "Pixel", "Galaxy", "Pixel");
+    }
+
+    [Fact]
+    public async Task Active_Phone_Events_Stay_In_Order_When_Changes_Happen_Together()
+    {
+        var phones = new List<Phone>();
+        for (var i = 0; i < 4; i++) phones.Add(await PairAsync($"Phone {i}"));
+        var seen = new List<BridgeSession?>();
+        _host.ActiveSessionChanged += s => { lock (seen) seen.Add(s); };
+        var channels = new List<EncryptedChannel>();
+        try
+        {
+            foreach (var p in phones) channels.Add(await ConnectAsync(p, [Features.Files]));
+            // Users clicking the picker while phones come and go.
+            var picks = Task.Run(() => { for (var i = 0; i < 200; i++) _host.ActiveDeviceId = phones[i % 4].Id; });
+            await channels[1].DisposeAsync();
+            channels.Add(await ConnectAsync(phones[1], [Features.Files]));
+            await picks;
+            await Task.Delay(200);
+            lock (seen)
+            {
+                for (var i = 1; i < seen.Count; i++) Assert.False(ReferenceEquals(seen[i], seen[i - 1]), "the same active phone was announced twice in a row");
+                Assert.True(ReferenceEquals(seen[^1], _host.CurrentSession), "the last announcement isn't the phone that's active now");
+            }
+        }
+        finally { foreach (var c in channels) await c.DisposeAsync(); }
     }
 
     [Fact]
