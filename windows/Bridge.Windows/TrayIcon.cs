@@ -17,11 +17,13 @@ public sealed class TrayIcon : IDisposable
 {
     private readonly TaskbarIcon _icon;
 
-    public TrayIcon(Action open, Action exit)
+    public TrayIcon(Action open, Action exit, Action? sendClipboard = null)
     {
         var openCommand = new RelayCommand(open);
         var menu = new MenuFlyout();
         menu.Items.Add(new MenuFlyoutItem { Text = "Open Bridge", Command = openCommand });
+        if (sendClipboard is not null)
+            menu.Items.Add(new MenuFlyoutItem { Text = "Send clipboard to phone", Command = new RelayCommand(sendClipboard) });
         menu.Items.Add(new MenuFlyoutItem { Text = "Exit", Command = new RelayCommand(exit) });
 
         _icon = new TaskbarIcon

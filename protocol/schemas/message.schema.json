@@ -43,6 +43,8 @@
         "photos.fetch",
         "photos.fetched",
         "photos.changed",
+        "handoff.open",
+        "handoff.ack",
         "error"
       ]
     },

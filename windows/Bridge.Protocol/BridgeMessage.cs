@@ -35,6 +35,8 @@ public static class MessageType
     public const string PhotosFetch = "photos.fetch";
     public const string PhotosFetched = "photos.fetched";
     public const string PhotosChanged = "photos.changed";
+    public const string HandoffOpen = "handoff.open";
+    public const string HandoffAck = "handoff.ack";
     public const string Error = "error";
 }
 
@@ -46,6 +48,8 @@ public static class Features
     public const string Notifications = "notifications";
     /// <summary>The PC can browse the phone's photos (photos.*); the phone advertises it.</summary>
     public const string Photos = "photos";
+    /// <summary>Links and text handed from one device to the other (handoff.*).</summary>
+    public const string Handoff = "handoff";
     /// <summary>Interrupted transfers continue where they stopped (file.resume).</summary>
     public const string FilesResume = "files.resume";
     /// <summary>Folder transfers (file.start relativePath / batch fields).</summary>

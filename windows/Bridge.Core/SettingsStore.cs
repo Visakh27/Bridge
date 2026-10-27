@@ -22,6 +22,10 @@ public sealed record BridgeSettings
     public bool SendToMenu { get; init; } = true;
     /// <summary>The received-files folder is pinned to Explorer's Quick access.</summary>
     public bool QuickAccessPin { get; init; }
+    /// <summary>Accept links and text sent from the phone (handoff).</summary>
+    public bool ReceiveHandoff { get; init; } = true;
+    /// <summary>Open links from the phone in the browser right away instead of offering them in a notification.</summary>
+    public bool OpenLinksAutomatically { get; init; }
     /// <summary>The first-run guide has been seen.</summary>
     public bool OnboardingDone { get; init; }
 }

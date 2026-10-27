@@ -32,6 +32,20 @@ class BridgeApplication : Application() {
         }
     }
 
+    /** Links and text from the PC (and answers to the ones this phone sends). */
+    val handoffInbox: com.bridge.app.handoff.HandoffInbox by lazy {
+        val notifier = com.bridge.app.handoff.HandoffNotifier(this)
+        com.bridge.app.handoff.HandoffInbox(
+            enabled = { BridgePrefs.handoffEnabled(this) },
+            onLink = notifier::showLink,
+            onText = { text -> notifier.copyText(text) { com.bridge.app.service.BridgeConnectionService.writeClipboardFromPc(it) } },
+        ).also {
+            it.onCompleted = { dir, kind, status ->
+                diagnostics.info("handoff", LogField.code("dir", dir), LogField.code("kind", kind), LogField.code("status", status))
+            }
+        }
+    }
+
     /** Metadata-only diagnostics log (Settings › Diagnostics). */
     val diagnostics: DiagnosticsLog by lazy {
         DiagnosticsLog(java.io.File(filesDir, "logs")).also { it.enabled = BridgePrefs.diagnosticsEnabled(this) }
@@ -46,6 +60,7 @@ class BridgeApplication : Application() {
 
     companion object {
         const val CONNECTION_CHANNEL_ID = "bridge_connection"
+        const val HANDOFF_CHANNEL_ID = "bridge_handoff"
     }
 
     override fun onCreate() {
@@ -60,6 +75,9 @@ class BridgeApplication : Application() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CONNECTION_CHANNEL_ID, "Bridge connection", NotificationManager.IMPORTANCE_LOW)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(HANDOFF_CHANNEL_ID, "Links and text from your PC", NotificationManager.IMPORTANCE_DEFAULT)
         )
     }
 }

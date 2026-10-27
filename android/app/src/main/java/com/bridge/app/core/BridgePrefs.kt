@@ -8,6 +8,7 @@ object BridgePrefs {
     private const val ONBOARDING_DONE = "onboarding_done"
     private const val DIAGNOSTICS = "diagnostics"
     private const val PHOTOS = "photos_enabled"
+    private const val HANDOFF = "handoff_enabled"
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -26,6 +27,10 @@ object BridgePrefs {
     /** "Let your PC browse photos": off until the user turns it on. */
     fun photosEnabled(context: Context) = prefs(context).getBoolean(PHOTOS, false)
     fun setPhotosEnabled(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean(PHOTOS, enabled).apply()
+
+    /** "Receive links and text from your PC": on by default (they only show a notification / fill the clipboard). */
+    fun handoffEnabled(context: Context) = prefs(context).getBoolean(HANDOFF, true)
+    fun setHandoffEnabled(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean(HANDOFF, enabled).apply()
 
     fun appVersion(context: Context): String =
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"

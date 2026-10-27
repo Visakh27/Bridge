@@ -57,7 +57,8 @@ public partial class App : Application
         if (fromToast && activation!.Data is AppNotificationActivatedEventArgs toast)
             MainWindowInstance.OnToastInvoked(toast.Arguments, toast.UserInput);
 
-        _tray = new TrayIcon(ShowMainWindow, () => _ = ExitAsync());
+        _tray = new TrayIcon(ShowMainWindow, () => _ = ExitAsync(),
+            () => { if (MainWindowInstance is { } w) w.DispatcherQueue.TryEnqueue(() => _ = w.SendClipboardToPhoneAsync()); });
     }
 
     /// <summary>Another launch was handed to this instance (see Program): show the window, send files, or handle the toast.</summary>
@@ -80,20 +81,40 @@ public partial class App : Application
             window.DispatcherQueue.TryEnqueue(ShowMainWindow);
     }
 
-    /// <summary>Explorer's Share menu (MSIX): take the shared files and folders, then let Explorer go.</summary>
+    /// <summary>
+    /// The Share menu (MSIX): files and folders are sent as files; a web link (e.g. from Edge) is
+    /// handed over to open on the phone, and plain text goes on the phone's clipboard.
+    /// </summary>
     private static async Task HandleShareAsync(AppActivationArguments e)
     {
         if (e.Data is not global::Windows.ApplicationModel.Activation.IShareTargetActivatedEventArgs share) return;
         var operation = share.ShareOperation;
         try
         {
+            var formats = global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems;
+            var data = operation.Data;
             var paths = new List<string>();
-            if (operation.Data.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
-                foreach (var item in await operation.Data.GetStorageItemsAsync())
+            string? url = null, title = null, text = null;
+            if (data.Contains(formats))
+            {
+                foreach (var item in await data.GetStorageItemsAsync())
                     if (!string.IsNullOrEmpty(item.Path)) paths.Add(item.Path);
+            }
+            else if (data.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.WebLink))
+            {
+                url = (await data.GetWebLinkAsync())?.AbsoluteUri;
+                title = data.Properties.Title;
+            }
+            else if (data.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+            {
+                text = await data.GetTextAsync();
+            }
             operation.ReportCompleted();
-            var request = LaunchArguments.ParseSend([LaunchArguments.SendFlag, .. paths]);
-            if (request is not null) MainWindowInstance?.HandleSendRequest(request);
+            var window = MainWindowInstance;
+            if (window is null) return;
+            if (url is not null) window.DispatcherQueue.TryEnqueue(() => _ = window.HandoffAsync(url, title, null));
+            else if (text is not null) window.DispatcherQueue.TryEnqueue(() => _ = window.HandoffAsync(null, null, text));
+            else if (LaunchArguments.ParseSend([LaunchArguments.SendFlag, .. paths]) is { } request) window.HandleSendRequest(request);
         }
         catch (Exception)
         {

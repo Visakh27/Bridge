@@ -43,6 +43,7 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
     var access by remember { mutableStateOf(listenerAccess()) }
     var canPost by remember { mutableStateOf(postAllowed()) }
     var photos by remember { mutableStateOf(BridgePrefs.photosEnabled(context)) }
+    var handoff by remember { mutableStateOf(BridgePrefs.handoffEnabled(context)) }
     var photoAccess by remember { mutableStateOf(MediaStorePhotoLibrary.hasPermission(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -88,6 +89,11 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
                 Text("Allow Bridge notifications")
             }
         }
+
+        Section("Links and text")
+        SwitchRow("Receive links and text from your PC",
+            "A link from your PC shows a notification you can tap to open it; text goes on this phone's clipboard. To send one to your PC, share it to Bridge from any app.",
+            handoff) { handoff = it; BridgePrefs.setHandoffEnabled(context, it) }
 
         Section("Photos on your PC")
         SwitchRow("Let your PC browse photos",

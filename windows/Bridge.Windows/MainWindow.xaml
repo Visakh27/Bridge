@@ -142,6 +142,12 @@
                 <ToggleSwitch x:Name="SendToToggle" Header="Show Bridge in Explorer's Send to menu" Toggled="OnSettingToggled" />
                 <TextBlock x:Name="ShareHintText" TextWrapping="Wrap" FontSize="12" Opacity="0.6" />
 
+                <TextBlock Text="Links and text from your phone" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="ReceiveHandoffToggle" Header="Receive links and text shared from my phone" Toggled="OnSettingToggled" />
+                <ToggleSwitch x:Name="OpenLinksToggle" Header="Open links in my browser right away (otherwise a notification offers them)" Toggled="OnSettingToggled" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="On the phone, share a web page or text to Bridge. Text goes on this PC's clipboard. To send the other way, use the tray icon's Send clipboard to phone, or share a link to Bridge." />
+
                 <TextBlock Text="Starting Bridge" FontWeight="SemiBold" Margin="0,8,0,0" />
                 <ToggleSwitch x:Name="StartWithWindowsToggle" Header="Start Bridge when I sign in to Windows" Toggled="OnSettingToggled" />
                 <ToggleSwitch x:Name="StartMinimizedToggle" Header="Start in the system tray, without opening the window" Toggled="OnSettingToggled" />

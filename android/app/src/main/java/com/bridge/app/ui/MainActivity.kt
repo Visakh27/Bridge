@@ -112,7 +112,15 @@ class MainActivity : ComponentActivity() {
         }
         setIntent(Intent(this, MainActivity::class.java)) // don't re-send on rotation
         if (uris.isEmpty()) {
-            Toast.makeText(this, "Bridge can send files to your PC; that share didn't include a file.", Toast.LENGTH_LONG).show()
+            // A web page or text from another app: hand it over (a link opens on the PC, text goes on its clipboard).
+            val text = intent?.getStringExtra(Intent.EXTRA_TEXT)
+            if (intent?.action == Intent.ACTION_SEND && !text.isNullOrBlank()) {
+                BridgeConnectionService.handoffShared(this, text, intent.getStringExtra(Intent.EXTRA_SUBJECT)) { message ->
+                    runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+                }
+            } else {
+                Toast.makeText(this, "Bridge can send files, links and text to your PC; that share had none.", Toast.LENGTH_LONG).show()
+            }
             return
         }
 

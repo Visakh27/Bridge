@@ -59,6 +59,14 @@ Bridge.Security ────────┤    platform)         ├────
   `ExplorerIntegration` adds the Send to shortcut and the Quick access pin,
   and `App` routes Send to (first launch or a redirected second launch) and
   Share activations to the queue.
+- **Handoff (links and text)** — `HandoffRules` (link/text checks, ASCII host,
+  title cleaning) and the receiving/sending logic are plain code on both
+  sides: `Bridge.Core` `HandoffService` and Android `handoff/HandoffInbox`
+  (de-duplicated ids, a 20-a-minute limit, waiting for the answer). The
+  Windows app turns what arrives into toasts (Open / Copy link) or opens the
+  browser, and sends from the Share menu and the tray's "Send clipboard to
+  phone"; Android's `HandoffNotifier` posts the link notification or sets the
+  clipboard, and `MainActivity` sends text and links shared from other apps.
 - **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
   `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
   `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and

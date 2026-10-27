@@ -76,6 +76,21 @@ public sealed class ClipboardSyncService
         }
     }
 
+    /// <summary>
+    /// Puts text that came from the phone another way (a handoff) on the local clipboard
+    /// without clipboard sync sending it straight back. Works whether or not sync is on.
+    /// </summary>
+    public async Task WriteFromPeerAsync(string text)
+    {
+        lock (_gate) _lastSynced = text;
+        try { await _clipboard.WriteTextAsync(text); }
+        catch
+        {
+            lock (_gate) { if (_lastSynced == text) _lastSynced = null; }
+            throw;
+        }
+    }
+
     /// <summary>Call for every incoming BridgeMessage of type clipboard.update.</summary>
     public async Task HandleIncomingAsync(BridgeMessage message)
     {

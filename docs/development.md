@@ -145,6 +145,18 @@ and status-bar). `--check` verifies the committed assets.
   hints, stray answers, and logs without names. Cross-platform
   (`e2e-photos`): photos off then on, 130 photos in 3 pages, previews,
   a 3 MB original byte-for-byte, a deleted photo, and both logs checked.
+- Handoff: `HandoffTests` (xUnit) and `HandoffTest` (JUnit) cover the link
+  rules (schemes, user info, whitespace, length, IPv4/IPv6, international
+  names normalized to punycode and stable), title and text cleaning, toast
+  arguments re-checked, links offered vs opened, text copied, switched off,
+  floods, repeated ids answered once, ids and answers from the peer that
+  aren't valid, waiting for and normalizing answers, no phone / no support /
+  a dropped phone, and logs without links or text. Cross-platform
+  (`e2e-handoff`): links (including an international name) and text both
+  ways over a real session, `javascript:` and `file:` refused before
+  sending, each side turned off, a 22-message burst limited to the minute's
+  allowance, and both logs checked; real messages from both apps are
+  validated against `handoff_*.schema.json` and malformed ones rejected.
 - Polish: `PolishTests` (xUnit) and `PolishTest` (JUnit) cover the
   diagnostics log (only safe field shapes, rotation and caps, retention,
   disabled/cleared, concurrent writers, unwritable folders), a real session
@@ -165,7 +177,11 @@ and status-bar). `--check` verifies the committed assets.
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: Explorer's Send to entry
+- Manual/integration still needed on real devices: sharing a page from
+  Chrome/Edge and text from another app to Bridge (both ways), the PC link
+  toast's Open / Copy link buttons (also after Bridge was closed), "Open
+  links right away", the tray's "Send clipboard to phone", the phone's link
+  notification opening the browser, Android 13+ clipboard toasts, Explorer's Send to entry
   (and a second launch handing it to the running Bridge), the MSIX Share
   target, the waiting notification's Cancel, the Quick access pin, the Photos view and
   phone setting (permission prompt, Android 14 selected photos, HEIC files,
