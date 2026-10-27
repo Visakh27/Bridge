@@ -164,8 +164,9 @@ and status-bar). `--check` verifies the committed assets.
   reaching every phone while one phone's clipboard reaches no other, toast
   replies routed to (and waiting for) the right phone, photo and handoff
   answers accepted only from the phone asked, per-phone preview caches and
-  handoff limits, a waiting Explorer send kept for the picked phone, and the
-  log counting phones without names. `MultiPcTest` (JUnit) covers the PC
+  handoff limits, a waiting Explorer send kept for the picked phone, two
+  phones finishing same-named files at the same moment (both kept, byte for
+  byte), and the log counting phones without names. `MultiPcTest` (JUnit) covers the PC
   order, falling through an unreachable PC without waiting, one backoff per
   round, a PC that forgot the phone being dropped while the others still
   work, choosing another PC mid-session, a full PC not triggering discovery,
