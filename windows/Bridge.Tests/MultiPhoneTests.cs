@@ -207,6 +207,40 @@ public sealed class MultiPhoneTests : IDisposable
         Assert.Single(await _store.ListAsync());
     }
 
+    [Fact]
+    public async Task Two_Phones_Sending_Files_With_The_Same_Name_At_Once_Both_Arrive_Intact()
+    {
+        var pixel = await PairAsync("Pixel");
+        var galaxy = await PairAsync("Galaxy");
+        await using var a = await ConnectAsync(pixel, [Features.Files]);
+        await using var b = await ConnectAsync(galaxy, [Features.Files]);
+
+        async Task<byte[]> Send(EncryptedChannel ch, int seed)
+        {
+            var data = new byte[3 * FileTransferService.ChunkSize + 123];
+            new Random(seed).NextBytes(data);
+            var id = Guid.NewGuid().ToString();
+            var chunks = (data.Length + FileTransferService.ChunkSize - 1) / FileTransferService.ChunkSize;
+            await ch.SendAsync(BridgeMessage.Create(MessageType.FileStart,
+                new FileStartPayload(id, "IMG_0001.jpg", data.Length, FileHasher.Sha256Hex(data), chunks)));
+            for (var i = 0; i < chunks; i++)
+            {
+                var part = Convert.ToBase64String(data, i * FileTransferService.ChunkSize, Math.Min(FileTransferService.ChunkSize, data.Length - i * FileTransferService.ChunkSize));
+                await ch.SendAsync(BridgeMessage.Create(MessageType.FileChunk, new FileChunkPayload(id, i, part)));
+                await Task.Yield();
+            }
+            await ch.SendAsync(BridgeMessage.Create(MessageType.FileEnd, new FileEndPayload(id)));
+            Assert.Equal("ok", (await Next(ch, MessageType.FileAck)).PayloadAs<FileAckPayload>().Status);
+            return data;
+        }
+
+        var sent = await Task.WhenAll(Send(a, 1), Send(b, 2)); // interleaved on the wire
+        var saved = Directory.GetFiles(_downloads, "IMG_0001*.jpg").Select(File.ReadAllBytes).ToList();
+        Assert.Equal(2, saved.Count);
+        Assert.Contains(saved, f => f.AsSpan().SequenceEqual(sent[0]));
+        Assert.Contains(saved, f => f.AsSpan().SequenceEqual(sent[1]));
+    }
+
     // ------------------------------------------------------------------ clipboard
 
     [Fact]
