@@ -58,6 +58,7 @@ public sealed record SendOptions(string PeerId, bool PeerSupportsResume, bool Pe
 public sealed class FileTransferService
 {
     public const int ChunkSize = 64 * 1024;
+    private static readonly object FinalNameGate = new();
     public const int MaxConcurrentIncoming = 8;
     public const int MaxFolderFiles = 10_000;
     public const string PartialDirName = ".bridge-partial";
@@ -634,8 +635,13 @@ public sealed class FileTransferService
                 targetDir = SafeRelativePath.Resolve(downloadDir, rootName, rel) ?? throw new IOException("Unsafe folder path");
                 Directory.CreateDirectory(targetDir);
             }
-            finalPath = SafeFileName.UniquePath(targetDir, state.SafeName);
-            File.Move(state.TempPath, finalPath, overwrite: false);
+            // Choosing a free name and taking it must be one step: two phones can finish files with
+            // the same name at the same moment (one would replace or lose the other).
+            lock (FinalNameGate)
+            {
+                finalPath = SafeFileName.UniquePath(targetDir, state.SafeName);
+                File.Move(state.TempPath, finalPath, overwrite: false);
+            }
             if (state.MetaPath is not null) TryDelete(state.MetaPath);
             if (state.Resumable) State.MarkCompleted(state.PeerId, state.Meta.TransferId, finalPath, state.Meta.Sha256);
         }
