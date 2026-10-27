@@ -157,6 +157,24 @@ and status-bar). `--check` verifies the committed assets.
   sending, each side turned off, a 22-message burst limited to the minute's
   allowance, and both logs checked; real messages from both apps are
   validated against `handoff_*.schema.json` and malformed ones rejected.
+- Several devices: `MultiPhoneTests` (xUnit) cover two phones connected at
+  once, the active phone following the user's pick and falling back while it's
+  away, a reconnect replacing only its own session, the 8-phone limit (and a
+  reconnect still allowed at it), forgetting one phone, the PC's clipboard
+  reaching every phone while one phone's clipboard reaches no other, toast
+  replies routed to (and waiting for) the right phone, photo and handoff
+  answers accepted only from the phone asked, per-phone preview caches and
+  handoff limits, a waiting Explorer send kept for the picked phone, and the
+  log counting phones without names. `MultiPcTest` (JUnit) covers the PC
+  order, falling through an unreachable PC without waiting, one backoff per
+  round, a PC that forgot the phone being dropped while the others still
+  work, choosing another PC mid-session, a full PC not triggering discovery,
+  and the single-PC behaviour without a chooser. Cross-platform
+  (`e2e-multi`): two real phone sessions on one Windows host (clipboard both
+  ways without relay, handoff by phone and to the active phone, a file only
+  to one phone, one phone leaving), then one phone with two Windows hosts
+  (choosing, switching, falling back when one goes away, being forgotten by
+  one), with all four logs checked.
 - Polish: `PolishTests` (xUnit) and `PolishTest` (JUnit) cover the
   diagnostics log (only safe field shapes, rotation and caps, retention,
   disabled/cleared, concurrent writers, unwritable folders), a real session
@@ -177,7 +195,11 @@ and status-bar). `--check` verifies the committed assets.
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: sharing a page from
+- Manual/integration still needed on real devices: two phones on one PC
+  (the Send to picker, toasts showing which phone, replying to each, Forget
+  in Settings › Paired phones, "Pair another phone", the tray tooltip), one
+  phone with home and work PCs (Settings › Your PCs: Use this PC, Forget,
+  Pair another PC, moving between networks), sharing a page from
   Chrome/Edge and text from another app to Bridge (both ways), the PC link
   toast's Open / Copy link buttons (also after Bridge was closed), "Open
   links right away", the tray's "Send clipboard to phone", the phone's link

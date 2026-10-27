@@ -9,7 +9,7 @@ namespace Bridge.Core;
 /// launched Bridge. Parsing is strict: unknown kinds or missing fields mean
 /// "just open Bridge".
 /// </summary>
-public sealed record NotificationToastCommand(string Kind, string? Key = null, string? ActionId = null, string? AppId = null)
+public sealed record NotificationToastCommand(string Kind, string? Key = null, string? ActionId = null, string? AppId = null, string? DeviceId = null)
 {
     public const string Open = "open";
     public const string Reply = "reply";
@@ -36,6 +36,7 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
         if (Key is not null) args["key"] = Encode(Key);
         if (ActionId is not null) args["id"] = Encode(ActionId);
         if (AppId is not null) args["app"] = Encode(AppId);
+        if (DeviceId is not null) args["dev"] = Encode(DeviceId);
         return args;
     }
 
@@ -45,11 +46,13 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
         var key = Decode(args, "key");
         var id = Decode(args, "id");
         var app = Decode(args, "app");
+        // Which phone the notification came from; toasts from versions before several phones have none (= the active phone).
+        var dev = Decode(args, "dev") is { Length: > 0 and <= 128 } d ? d : null;
         return kind switch
         {
-            Reply or Press when !string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(id) => new(kind, key, id),
-            Dismiss when !string.IsNullOrEmpty(key) => new(kind, key),
-            Mute when !string.IsNullOrEmpty(app) => new(kind, AppId: app),
+            Reply or Press when !string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(id) => new(kind, key, id, DeviceId: dev),
+            Dismiss when !string.IsNullOrEmpty(key) => new(kind, key, DeviceId: dev),
+            Mute when !string.IsNullOrEmpty(app) => new(kind, AppId: app, DeviceId: dev),
             CancelSend => new(kind),
             // Toast arguments can come back from anywhere that can activate Bridge: the URL is checked again.
             OpenLink or CopyLink when key is not null && HandoffRules.CheckUrl(key) is not null => new(kind, key),
@@ -80,13 +83,13 @@ public sealed record NotificationToastCommand(string Kind, string? Key = null, s
             case Reply:
                 string? text = null;
                 userInput?.TryGetValue(ReplyInputId, out text);
-                return await router.ReplyAsync(Key!, ActionId!, text, ct);
+                return await router.ReplyAsync(Key!, ActionId!, text, ct, DeviceId);
             case Press:
-                return await router.PressAsync(Key!, ActionId!, ct);
+                return await router.PressAsync(Key!, ActionId!, ct, DeviceId);
             case Dismiss:
-                return await router.DismissAsync(Key!, ct) ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable;
+                return await router.DismissAsync(Key!, ct, DeviceId) ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable;
             case Mute:
-                return await router.MuteAppAsync(AppId!, ct) ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable;
+                return await router.MuteAppAsync(AppId!, ct, DeviceId) ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable;
             default:
                 return null;
         }

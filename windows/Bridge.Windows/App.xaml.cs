@@ -122,6 +122,17 @@ public partial class App : Application
         }
     }
 
+    private static App? Instance => Current as App;
+
+    /// <summary>The tray icon's hover text (any thread).</summary>
+    public static void SetTrayToolTip(string text)
+    {
+        var app = Instance;
+        var window = MainWindowInstance;
+        if (app?._tray is null || window is null) return;
+        window.DispatcherQueue.TryEnqueue(() => app._tray?.SetToolTip(text));
+    }
+
     public static void ShowMainWindow()
     {
         if (MainWindowInstance is null) return;

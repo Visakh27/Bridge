@@ -12,6 +12,7 @@ namespace Bridge.Core;
 public sealed class BridgeDiagnostics
 {
     private readonly DiagnosticsLog _log;
+    private readonly BridgeHost _host;
 
     public BridgeDiagnostics(DiagnosticsLog log, BridgeHost host, FileTransferService files, NotificationActionRouter? notificationActions = null,
         PhotoBrowser? photos = null, HandoffService? handoff = null)
@@ -19,7 +20,10 @@ public sealed class BridgeDiagnostics
         _log = log;
         host.DevicePaired += d => _log.Info("pair.accepted", LogField.Id("peer", d.DeviceId, _log));
         host.ConnectionRejected += reason => _log.Warn("connection.rejected", RejectionFields(reason));
+        _host = host;
         host.SessionStarted += OnSessionStarted;
+        host.ActiveSessionChanged += active =>
+            _log.Info("phone.active", LogField.Id("peer", active?.Device.DeviceId, _log), LogField.Num("phones", host.Sessions.Count));
         files.ProgressChanged += OnProgress;
         if (notificationActions is not null)
             notificationActions.Completed += (kind, status) =>
@@ -63,8 +67,10 @@ public sealed class BridgeDiagnostics
         var peer = session.Device.DeviceId;
         var started = DateTimeOffset.UtcNow;
         _log.Info("session.started", LogField.Id("peer", peer, _log), LogField.Num("features", session.Device.PeerFeatures.Count),
-            LogField.Flag("resume", session.SendOptions.PeerSupportsResume), LogField.Flag("actions", session.SupportsNotificationActions));
-        session.Ended += _ => _log.Info("session.ended", LogField.Id("peer", peer, _log), LogField.Ms("duration_ms", DateTimeOffset.UtcNow - started));
+            LogField.Flag("resume", session.SendOptions.PeerSupportsResume), LogField.Flag("actions", session.SupportsNotificationActions),
+            LogField.Num("phones", _host.Sessions.Count));
+        session.Ended += _ => _log.Info("session.ended", LogField.Id("peer", peer, _log), LogField.Ms("duration_ms", DateTimeOffset.UtcNow - started),
+            LogField.Num("phones", _host.Sessions.Count));
         session.HandlerFailed += (type, ex) => _log.Warn("handler.failed", LogField.Code("type", TypeCode(type)), LogField.Error(ex));
         session.PeerError += error => _log.Warn("peer.error", LogField.Code("code", error?.Code));
     }

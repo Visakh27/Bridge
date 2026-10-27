@@ -28,7 +28,7 @@ class SharedPrefsPairedDeviceStore(context: Context) : PairedDeviceStore {
         synchronized(LOCK) { write(read().filter { it.deviceId != deviceId }) }
     }
 
-    /** The PC to connect to: the most recently paired one. */
+    /** Any paired PC (the most recently paired one); see PcChooser for which one to connect to. */
     suspend fun current(): PairedDevice? = list().lastOrNull()
 
     private fun read(): List<PairedDevice> {

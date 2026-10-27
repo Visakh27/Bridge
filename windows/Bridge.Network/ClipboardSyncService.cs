@@ -23,7 +23,8 @@ public sealed class ClipboardSyncService
     private readonly object _gate = new();
     private string? _lastSynced; // last text sent or received, to break echo loops
     private volatile bool _enabled;
-    private volatile EncryptedChannel? _channel;
+    /// <summary>Connected phones (their channels) and whether each advertised "clipboard".</summary>
+    private readonly Dictionary<EncryptedChannel, bool> _peers = new(ReferenceEqualityComparer.Instance);
 
     public ClipboardSyncService(IClipboardAccess clipboard)
     {
@@ -38,14 +39,20 @@ public sealed class ClipboardSyncService
         set => _enabled = value;
     }
 
-    /// <summary>Whether the peer advertised the "clipboard" feature.</summary>
-    public bool PeerSupportsClipboard { get; set; }
+    /// <summary>A phone connected (BridgeSession.Start); <paramref name="supportsClipboard"/>: it advertised "clipboard".</summary>
+    public void AddPeer(EncryptedChannel channel, bool supportsClipboard) { lock (_gate) _peers[channel] = supportsClipboard; }
 
-    public EncryptedChannel? Channel
+    /// <summary>The phone re-advertised its features.</summary>
+    public void SetPeerSupport(EncryptedChannel channel, bool supportsClipboard)
     {
-        get => _channel;
-        set => _channel = value;
+        lock (_gate) { if (_peers.ContainsKey(channel)) _peers[channel] = supportsClipboard; }
     }
+
+    /// <summary>The phone's session ended.</summary>
+    public void RemovePeer(EncryptedChannel channel) { lock (_gate) _peers.Remove(channel); }
+
+    /// <summary>How many connected phones get this PC's clipboard.</summary>
+    public int PeerCount { get { lock (_gate) return _peers.Count(p => p.Value); } }
 
     /// <summary>Raised when an outgoing update couldn't be sent (never throws into the clipboard event).</summary>
     public event Action<Exception>? SendFailed;
@@ -56,21 +63,33 @@ public sealed class ClipboardSyncService
         // or it would crash the process.
         try
         {
-            var channel = _channel;
-            if (!_enabled || !PeerSupportsClipboard || channel is null) return;
+            if (!_enabled) return;
             if (ContainsLikelySensitiveContent(newText)) return;
+            List<EncryptedChannel> targets;
             lock (_gate)
             {
-                if (newText == _lastSynced) return; // our own write echoing back, or no change
+                targets = _peers.Where(p => p.Value).Select(p => p.Key).ToList();
+                if (targets.Count == 0) return;
+                if (newText == _lastSynced) return; // our own write echoing back (incl. text from a phone), or no change
                 _lastSynced = newText;
             }
 
-            await channel.SendAsync(BridgeMessage.Create(MessageType.ClipboardUpdate,
-                new ClipboardUpdatePayload("text", newText)));
+            var message = BridgeMessage.Create(MessageType.ClipboardUpdate, new ClipboardUpdatePayload("text", newText));
+            var failures = new List<Exception>();
+            foreach (var channel in targets)
+            {
+                try { await channel.SendAsync(message); }
+                catch (Exception ex) { failures.Add(ex); }
+            }
+            if (failures.Count == targets.Count)
+            {
+                // Delivered nowhere: forget it so copying the same text again retries.
+                lock (_gate) { if (_lastSynced == newText) _lastSynced = null; }
+            }
+            foreach (var ex in failures) SendFailed?.Invoke(ex);
         }
         catch (Exception ex)
         {
-            // Not delivered: forget it so copying the same text again retries.
             lock (_gate) { if (_lastSynced == newText) _lastSynced = null; }
             SendFailed?.Invoke(ex);
         }

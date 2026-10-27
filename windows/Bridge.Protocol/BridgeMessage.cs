@@ -66,6 +66,8 @@ public static class ErrorCodes
     public const string DeviceUnpaired = "DEVICE_UNPAIRED";
     public const string TransferInterrupted = "TRANSFER_INTERRUPTED";
     public const string PermissionDenied = "PERMISSION_DENIED";
+    /// <summary>The PC already has as many phones connected as it allows.</summary>
+    public const string TooManyDevices = "TOO_MANY_DEVICES";
 }
 
 public sealed class BridgeMessage

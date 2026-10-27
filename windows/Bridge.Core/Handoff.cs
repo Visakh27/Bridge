@@ -72,9 +72,10 @@ public sealed class HandoffService
     private readonly Func<bool> _enabled;
     private readonly Func<bool> _autoOpen;
     private readonly Func<DateTimeOffset> _now;
-    private readonly Queue<DateTimeOffset> _recent = new();
+    /// <summary>Accepted handoffs in the last minute, per phone (each phone has its own allowance).</summary>
+    private readonly Dictionary<string, Queue<DateTimeOffset>> _recent = new();
     private readonly LinkedList<(string Id, string Status)> _seen = new();
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pending = new();
+    private readonly ConcurrentDictionary<string, (BridgeSession To, TaskCompletionSource<string> Answer)> _pending = new();
 
     /// <param name="enabled">Settings: receive links and text from the phone.</param>
     /// <param name="autoOpen">Settings: open links from the phone right away (else a notification offers them).</param>
@@ -100,14 +101,16 @@ public sealed class HandoffService
         {
             HandoffAckPayload? ack = null;
             try { ack = message.PayloadAs<HandoffAckPayload>(); } catch (InvalidDataException) { }
-            if (ack?.Id is { } id && _pending.TryGetValue(id, out var waiting)) waiting.TrySetResult(WireStatus(ack.Status));
+            // An answer counts only from the phone it was sent to.
+            if (ack?.Id is { } id && _pending.TryGetValue(id, out var waiting) && ReferenceEquals(waiting.To, session))
+                waiting.Answer.TrySetResult(WireStatus(ack.Status));
             return;
         }
         if (message.Type != MessageType.HandoffOpen) return;
         HandoffPayload? p = null;
         try { p = message.PayloadAs<HandoffPayload>(); } catch (InvalidDataException) { }
         if (p?.Id is not { Length: > 0 and <= HandoffRules.MaxId } id2) return; // nothing to answer to
-        var status = Decide(p, session.Device.DeviceName);
+        var status = Decide(p, session.Device.DeviceId, session.Device.DeviceName);
         Completed?.Invoke("in", p.Kind is HandoffKind.Url or HandoffKind.Text ? p.Kind : "unknown", status);
         try { await session.SendAsync(BridgeMessage.Create(MessageType.HandoffAck, new HandoffAckPayload(id2, status))); }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
@@ -120,32 +123,33 @@ public sealed class HandoffService
         _ => HandoffStatus.Invalid,
     };
 
-    private string Decide(HandoffPayload p, string phone)
+    private string Decide(HandoffPayload p, string deviceId, string phone)
     {
+        var seenKey = $"{deviceId}\n{p.Id}"; // ids are unique per sender only
         // One at a time, start to finish: two copies of an id arriving together still act once.
         lock (_recent)
         {
             // A repeat of one already handled (the sender retried): same answer, nothing shown twice.
-            foreach (var (seenId, seenStatus) in _seen) if (seenId == p.Id) return seenStatus;
-            var status = DecideNew(p, phone);
-            _seen.AddFirst((p.Id, status));
+            foreach (var (seenId, seenStatus) in _seen) if (seenId == seenKey) return seenStatus;
+            var status = DecideNew(p, deviceId, phone);
+            _seen.AddFirst((seenKey, status));
             if (_seen.Count > 100) _seen.RemoveLast();
             return status;
         }
     }
 
-    private string DecideNew(HandoffPayload p, string phone)
+    private string DecideNew(HandoffPayload p, string deviceId, string phone)
     {
         if (!_enabled()) return HandoffStatus.Disabled;
         switch (p.Kind)
         {
             case HandoffKind.Url when HandoffRules.CheckUrl(p.Url, p.Title) is { } link:
-                if (!Admit()) return HandoffStatus.Busy;
+                if (!Admit(deviceId)) return HandoffStatus.Busy;
                 var open = _autoOpen();
                 LinkReceived?.Invoke(link, open, phone);
                 return open ? HandoffStatus.Opened : HandoffStatus.Shown;
             case HandoffKind.Text when HandoffRules.CheckText(p.Text) is { } text:
-                if (!Admit()) return HandoffStatus.Busy;
+                if (!Admit(deviceId)) return HandoffStatus.Busy;
                 TextReceived?.Invoke(text, phone);
                 return HandoffStatus.Copied;
             default:
@@ -153,49 +157,52 @@ public sealed class HandoffService
         }
     }
 
-    /// <summary>Sliding one-minute window: at most <see cref="MaxPerMinute"/> accepted.</summary>
-    private bool Admit()
+    /// <summary>Sliding one-minute window per phone: at most <see cref="MaxPerMinute"/> accepted.</summary>
+    private bool Admit(string deviceId)
     {
         lock (_recent)
         {
             var now = _now();
-            while (_recent.Count > 0 && now - _recent.Peek() >= TimeSpan.FromMinutes(1)) _recent.Dequeue();
-            if (_recent.Count >= MaxPerMinute) return false;
-            _recent.Enqueue(now);
+            if (!_recent.TryGetValue(deviceId, out var times)) _recent[deviceId] = times = new Queue<DateTimeOffset>();
+            while (times.Count > 0 && now - times.Peek() >= TimeSpan.FromMinutes(1)) times.Dequeue();
+            if (times.Count >= MaxPerMinute) return false;
+            times.Enqueue(now);
             return true;
         }
     }
 
-    /// <summary>Hands a link to the phone; returns its <see cref="HandoffStatus"/>.</summary>
-    public Task<string> SendUrlAsync(string url, string? title = null, CancellationToken ct = default) =>
+    /// <summary>
+    /// Hands a link to a phone (<paramref name="deviceId"/>; null = the active phone); returns its <see cref="HandoffStatus"/>.
+    /// </summary>
+    public Task<string> SendUrlAsync(string url, string? title = null, CancellationToken ct = default, string? deviceId = null) =>
         HandoffRules.CheckUrl(url, title) is { } link
-            ? SendAsync(new HandoffPayload(NewId(), HandoffKind.Url) { Url = link.Url, Title = link.Title }, ct)
+            ? SendAsync(new HandoffPayload(NewId(), HandoffKind.Url) { Url = link.Url, Title = link.Title }, deviceId, ct)
             : Task.FromResult(HandoffStatus.Invalid);
 
-    /// <summary>Hands text to the phone (it goes on the phone's clipboard).</summary>
-    public Task<string> SendTextAsync(string text, CancellationToken ct = default) =>
+    /// <summary>Hands text to a phone (it goes on the phone's clipboard).</summary>
+    public Task<string> SendTextAsync(string text, CancellationToken ct = default, string? deviceId = null) =>
         HandoffRules.CheckText(text) is { } t
-            ? SendAsync(new HandoffPayload(NewId(), HandoffKind.Text) { Text = t }, ct)
+            ? SendAsync(new HandoffPayload(NewId(), HandoffKind.Text) { Text = t }, deviceId, ct)
             : Task.FromResult(HandoffStatus.Invalid);
 
     /// <summary>Clipboard content as a handoff: a lone link goes as a link, anything else as text.</summary>
-    public Task<string> SendClipboardAsync(string? clipboard, CancellationToken ct = default)
+    public Task<string> SendClipboardAsync(string? clipboard, CancellationToken ct = default, string? deviceId = null)
     {
         var trimmed = clipboard?.Trim();
-        return HandoffRules.CheckUrl(trimmed) is not null ? SendUrlAsync(trimmed!, null, ct) : SendTextAsync(clipboard ?? "", ct);
+        return HandoffRules.CheckUrl(trimmed) is not null ? SendUrlAsync(trimmed!, null, ct, deviceId) : SendTextAsync(clipboard ?? "", ct, deviceId);
     }
 
     private static string NewId() => Guid.NewGuid().ToString("N");
 
-    private async Task<string> SendAsync(HandoffPayload payload, CancellationToken ct)
+    private async Task<string> SendAsync(HandoffPayload payload, string? deviceId, CancellationToken ct)
     {
-        var session = _host.CurrentSession;
+        var session = deviceId is null ? _host.CurrentSession : _host.SessionFor(deviceId);
         string status;
         if (session is not { IsRunning: true } || !session.Device.PeerFeatures.Contains(Features.Handoff)) status = HandoffStatus.Unavailable;
         else
         {
             var answer = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pending[payload.Id] = answer;
+            _pending[payload.Id] = (session, answer);
             try
             {
                 await session.SendAsync(BridgeMessage.Create(MessageType.HandoffOpen, payload), ct);

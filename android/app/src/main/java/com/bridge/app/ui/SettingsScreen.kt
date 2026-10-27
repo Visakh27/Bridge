@@ -26,13 +26,22 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.bridge.app.core.BridgePrefs
+import com.bridge.app.network.PairedDevice
+import kotlinx.coroutines.launch
 import com.bridge.app.notifications.BridgeNotificationListener
 import com.bridge.app.photos.MediaStorePhotoLibrary
 import com.bridge.app.service.BridgeConnectionService
 
-/** Settings: clipboard, notifications on the PC, diagnostics, about, forget the PC. */
+/** Settings: your PCs, clipboard, notifications on the PC, links, photos, diagnostics, about. */
 @Composable
-fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onChooseApps: () -> Unit, onForget: () -> Unit) {
+fun SettingsScreen(
+    state: BridgeConnectionService.State,
+    onBack: () -> Unit,
+    onChooseApps: () -> Unit,
+    /** A PC was forgotten; [left] PCs are still paired. */
+    onForgotten: (left: Int) -> Unit,
+    onPairAnother: () -> Unit,
+) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     var clipboard by remember { mutableStateOf(BridgeConnectionService.isClipboardSyncEnabled(context)) }
@@ -58,11 +67,47 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
         photoAccess = MediaStorePhotoLibrary.hasPermission(context)
         BridgeConnectionService.photosSettingChanged(context)
     }
-    var confirmForget by remember { mutableStateOf(false) }
+    var confirmForget by remember { mutableStateOf<PairedDevice?>(null) }
+    var pcs by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
+    var pinned by remember { mutableStateOf(BridgeConnectionService.pinnedPcId(context)) }
+    var refresh by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(state.pcId, state.status, refresh) {
+        pcs = BridgeConnectionService.pairedPcs(context)
+        pinned = BridgeConnectionService.pinnedPcId(context)
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         TextButton(onClick = onBack) { Text("Back") }
         Text("Settings", style = MaterialTheme.typography.headlineSmall)
+
+        Section("Your PCs")
+        Text("This phone connects to one PC at a time: the one you choose here, or else the one it used last, then any other it can reach.",
+            style = MaterialTheme.typography.bodySmall)
+        for (pc in pcs) {
+            val connectedHere = state.pcId == pc.deviceId && state.status == BridgeConnectionService.Status.CONNECTED
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(pc.deviceName)
+                    Text(
+                        when {
+                            connectedHere -> "Connected"
+                            state.pcId == pc.deviceId && state.status == BridgeConnectionService.Status.CONNECTING -> "Connecting…"
+                            pinned == pc.deviceId -> "Your choice"
+                            else -> "Not connected"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (!connectedHere) TextButton(onClick = {
+                    BridgeConnectionService.switchToPc(context, pc.deviceId)
+                    pinned = pc.deviceId
+                    refresh++
+                }) { Text("Use this PC") }
+                TextButton(onClick = { confirmForget = pc }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+        OutlinedButton(onClick = onPairAnother, modifier = Modifier.padding(top = 8.dp)) { Text("Pair another PC") }
 
         Section("Clipboard")
         SwitchRow("Sync clipboard", "Copies from your phone are sent while Bridge is open (an Android privacy rule).", clipboard) {
@@ -133,18 +178,25 @@ fun SettingsScreen(state: BridgeConnectionService.State, onBack: () -> Unit, onC
 
         Section("About")
         Text("Bridge ${BridgePrefs.appVersion(context)}", style = MaterialTheme.typography.bodyMedium)
-        state.pcName?.let { Text("Paired with $it", style = MaterialTheme.typography.bodyMedium) }
         Spacer(Modifier.height(16.dp))
-        TextButton(onClick = { confirmForget = true }) { Text("Forget this PC", color = MaterialTheme.colorScheme.error) }
     }
 
-    if (confirmForget) {
+    confirmForget?.let { pc ->
         AlertDialog(
-            onDismissRequest = { confirmForget = false },
-            title = { Text("Forget ${state.pcName ?: "this PC"}?") },
-            text = { Text("You'll need to scan a new code on the PC to connect again.") },
-            confirmButton = { TextButton(onClick = { confirmForget = false; onForget() }) { Text("Forget") } },
-            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Cancel") } },
+            onDismissRequest = { confirmForget = null },
+            title = { Text("Forget ${pc.deviceName}?") },
+            text = { Text("You'll need to scan a new code on that PC to connect to it again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmForget = null
+                    scope.launch {
+                        val left = BridgeConnectionService.forgetPc(context, pc.deviceId)
+                        refresh++
+                        onForgotten(left)
+                    }
+                }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = null }) { Text("Cancel") } },
         )
     }
 }

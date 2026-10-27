@@ -40,20 +40,23 @@ public sealed class NotificationActionRouter
     /// next update (typically the app echoing "You: …") can go quietly to the notification centre
     /// instead of popping up again. Consumed by the call.
     /// </summary>
-    public bool TakeRecentAction(string key)
+    public bool TakeRecentAction(string key, string? deviceId = null)
     {
         lock (_actedOn)
         {
-            if (!_actedOn.Remove(key, out var at)) return false;
+            // No phone given (one phone, or a caller that doesn't know): that key from whichever phone.
+            var mark = deviceId is not null ? Mark(deviceId, key) : _actedOn.Keys.FirstOrDefault(k => k.EndsWith("\n" + key, StringComparison.Ordinal));
+            if (mark is null || !_actedOn.Remove(mark, out var at)) return false;
             return DateTime.UtcNow - at < EchoWindow;
         }
     }
 
     /// <summary>Runs an action, marking the key first: the app's update can arrive before the phone's answer.</summary>
-    private async Task<string> ActAsync(string key, Func<BridgeSession, Task<string>> act, CancellationToken ct)
+    private async Task<string> ActAsync(string? deviceId, string key, Func<BridgeSession, Task<string>> act, CancellationToken ct)
     {
-        var session = await SessionAsync(ct);
+        var session = await SessionAsync(deviceId, ct);
         if (session is null) return NotificationActionStatus.Unavailable;
+        key = Mark(session.Device.DeviceId, key); // notification keys are only unique per phone
         DateTime mark;
         lock (_actedOn)
         {
@@ -67,46 +70,55 @@ public sealed class NotificationActionRouter
         return status;
     }
 
-    /// <summary>Sends <paramref name="text"/> through a reply button. Returns a <see cref="NotificationActionStatus"/>.</summary>
-    public async Task<string> ReplyAsync(string key, string actionId, string? text, CancellationToken ct = default)
+    private static string Mark(string? deviceId, string key) => $"{deviceId}\n{key}";
+
+    /// <summary>
+    /// Sends <paramref name="text"/> through a reply button of a notification from phone
+    /// <paramref name="deviceId"/> (null: the active phone — toasts from older versions). Returns a <see cref="NotificationActionStatus"/>.
+    /// </summary>
+    public async Task<string> ReplyAsync(string key, string actionId, string? text, CancellationToken ct = default, string? deviceId = null)
     {
         text = text?.Trim();
         if (string.IsNullOrEmpty(text) || text.Length > PhoneNotificationText.MaxReply) return NotificationActionStatus.Invalid;
-        var status = await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, text, _actionTimeout, ct), ct);
+        var status = await ActAsync(deviceId, key, s => s.InvokeNotificationActionAsync(key, actionId, text, _actionTimeout, ct), ct);
         return Report("reply", status, status);
     }
 
     /// <summary>Presses a (non-reply) button.</summary>
-    public async Task<string> PressAsync(string key, string actionId, CancellationToken ct = default)
+    public async Task<string> PressAsync(string key, string actionId, CancellationToken ct = default, string? deviceId = null)
     {
-        var status = await ActAsync(key, s => s.InvokeNotificationActionAsync(key, actionId, null, _actionTimeout, ct), ct);
+        var status = await ActAsync(deviceId, key, s => s.InvokeNotificationActionAsync(key, actionId, null, _actionTimeout, ct), ct);
         return Report("press", status, status);
     }
 
     /// <summary>Clears the notification on the phone.</summary>
-    public async Task<bool> DismissAsync(string key, CancellationToken ct = default)
+    public async Task<bool> DismissAsync(string key, CancellationToken ct = default, string? deviceId = null)
     {
-        var ok = await SessionAsync(ct) is { } session && await session.DismissOnPhoneAsync(key, ct);
+        var ok = await SessionAsync(deviceId, ct) is { } session && await session.DismissOnPhoneAsync(key, ct);
         return Report("dismiss", ok, ok ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable);
     }
 
     /// <summary>Stops mirroring an app's notifications.</summary>
-    public async Task<bool> MuteAppAsync(string appId, CancellationToken ct = default)
+    public async Task<bool> MuteAppAsync(string appId, CancellationToken ct = default, string? deviceId = null)
     {
-        var ok = await SessionAsync(ct) is { } session && await session.MuteAppOnPhoneAsync(appId, ct);
+        var ok = await SessionAsync(deviceId, ct) is { } session && await session.MuteAppOnPhoneAsync(appId, ct);
         return Report("mute", ok, ok ? NotificationActionStatus.Ok : NotificationActionStatus.Unavailable);
     }
 
-    /// <summary>The live session if its phone supports actions, else the next one that starts within <see cref="SessionWait"/>.</summary>
-    private async Task<BridgeSession?> SessionAsync(CancellationToken ct)
+    /// <summary>
+    /// That phone's live session if it supports actions (any phone when <paramref name="deviceId"/> is null:
+    /// the active one), else its next session that starts within <see cref="SessionWait"/>. Never another phone's.
+    /// </summary>
+    private async Task<BridgeSession?> SessionAsync(string? deviceId, CancellationToken ct)
     {
-        if (Usable(_host.CurrentSession) is { } now) return now;
+        BridgeSession? Live() => Usable(deviceId is null ? _host.CurrentSession : _host.SessionFor(deviceId));
+        if (Live() is { } now) return now;
         var next = new TaskCompletionSource<BridgeSession>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStarted(BridgeSession s) { if (Usable(s) is { } ok) next.TrySetResult(ok); }
+        void OnStarted(BridgeSession s) { if ((deviceId is null || s.Device.DeviceId == deviceId) && Usable(s) is { } ok) next.TrySetResult(ok); }
         _host.SessionStarted += OnStarted;
         try
         {
-            if (Usable(_host.CurrentSession) is { } raced) return raced; // started while subscribing
+            if (Live() is { } raced) return raced; // started while subscribing
             return await next.Task.WaitAsync(SessionWait, ct);
         }
         catch (TimeoutException) { return null; }

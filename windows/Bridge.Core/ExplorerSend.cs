@@ -117,7 +117,9 @@ public static class LaunchArguments
 /// Sends what Explorer handed over: at once if the phone is connected,
 /// otherwise held until it connects again (for up to <see cref="Wait"/>), so
 /// "Send to → Bridge" works even while the phone is briefly away. Several
-/// requests made while waiting go out together, in order.
+/// requests made while waiting go out together, in order. With several phones,
+/// a request goes to the active phone; one that has to wait is kept for the
+/// phone the user picked (any phone if none was picked).
 /// </summary>
 public sealed class ExplorerSendQueue
 {
@@ -125,7 +127,7 @@ public sealed class ExplorerSendQueue
 
     private readonly BridgeHost _host;
     private readonly object _gate = new();
-    private readonly List<(SendRequest Request, CancellationTokenSource Expiry)> _pending = [];
+    private readonly List<(SendRequest Request, CancellationTokenSource Expiry, string? Target)> _pending = [];
     private readonly TimeSpan _startDelay;
 
     public ExplorerSendQueue(BridgeHost host, TimeSpan? wait = null, TimeSpan? startDelay = null)
@@ -159,7 +161,8 @@ public sealed class ExplorerSendQueue
         var session = _host.CurrentSession;
         if (session is { IsRunning: true }) return await SendNowAsync(session, request, false, ct);
 
-        var waiting = Enqueue(request);
+        var target = _host.ActiveDeviceId;
+        var waiting = Enqueue(request, target);
         Queued?.Invoke(request, waiting);
         // The phone may have connected between the check above and queuing: don't wait for the next connection.
         if (_host.CurrentSession is { IsRunning: true } arrived) _ = Task.Run(() => FlushAsync(arrived));
@@ -167,13 +170,13 @@ public sealed class ExplorerSendQueue
     }
 
     /// <summary>Adds a waiting request that is dropped (Expired) if the phone isn't back within <see cref="Wait"/>.</summary>
-    private int Enqueue(SendRequest request)
+    private int Enqueue(SendRequest request, string? target)
     {
         var expiry = new CancellationTokenSource();
         int waiting;
         lock (_gate)
         {
-            _pending.Add((request, expiry));
+            _pending.Add((request, expiry, target));
             waiting = _pending.Sum(p => p.Request.Count);
         }
         _ = Task.Delay(Wait, expiry.Token).ContinueWith(t =>
@@ -189,7 +192,7 @@ public sealed class ExplorerSendQueue
     /// <summary>Drops everything waiting (the "Cancel" on the waiting notification).</summary>
     public int CancelPending()
     {
-        List<(SendRequest Request, CancellationTokenSource Expiry)> dropped;
+        List<(SendRequest Request, CancellationTokenSource Expiry, string? Target)> dropped;
         lock (_gate) { dropped = [.. _pending]; _pending.Clear(); }
         foreach (var d in dropped) d.Expiry.Cancel();
         return dropped.Sum(d => d.Request.Count);
@@ -202,15 +205,20 @@ public sealed class ExplorerSendQueue
         await _flushing.WaitAsync(); // one flush at a time keeps requests in order
         try
         {
-            List<(SendRequest Request, CancellationTokenSource Expiry)> due;
-            lock (_gate) { due = [.. _pending]; _pending.Clear(); }
-            foreach (var (request, expiry) in due)
+            List<(SendRequest Request, CancellationTokenSource Expiry, string? Target)> due;
+            lock (_gate)
+            {
+                // Only what's meant for this phone (or for any phone); the rest keeps waiting for its own.
+                due = _pending.Where(p => p.Target is null || p.Target == session.Device.DeviceId).ToList();
+                _pending.RemoveAll(p => p.Target is null || p.Target == session.Device.DeviceId);
+            }
+            foreach (var (request, expiry, target) in due)
             {
                 expiry.Cancel();
                 expiry.Dispose();
                 if (!session.IsRunning)
                 {
-                    Enqueue(request); // the phone dropped again first: wait for it (with a fresh time limit)
+                    Enqueue(request, target); // the phone dropped again first: wait for it (with a fresh time limit)
                     continue;
                 }
                 await SendNowAsync(session, request, true, CancellationToken.None);

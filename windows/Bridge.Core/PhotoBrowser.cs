@@ -15,6 +15,9 @@ public sealed record PhotoFetch(string Status, string? SavedPath = null, string?
 /// requests by id; previews are cached (and a preview already on its way is
 /// shared, not asked for twice); an original arrives as a normal file transfer
 /// that this waits for. Everything from the phone is checked before use.
+/// With several phones connected it browses the active one
+/// (<see cref="BridgeHost.CurrentSession"/>); answers count only from the phone
+/// that was asked, and previews are cached per phone.
 /// </summary>
 public sealed class PhotoBrowser
 {
@@ -54,7 +57,7 @@ public sealed class PhotoBrowser
             if (_subscribed.TryGetValue(session, out _)) return;
             _subscribed.Add(session, new object());
         }
-        session.PhotosMessage += OnPhotosMessage;
+        session.PhotosMessage += message => OnPhotosMessage(session, message);
         // Only this session's requests end with it (a newer session's are unaffected).
         session.Ended += ended =>
         {
@@ -71,19 +74,29 @@ public sealed class PhotoBrowser
     /// <summary>Whether a connected phone offers photos at all (an older app doesn't).</summary>
     public bool PhoneSupportsPhotos => _host.CurrentSession is { IsRunning: true, SupportsPhotos: true };
 
-    private void OnPhotosMessage(BridgeMessage message)
+    private void OnPhotosMessage(BridgeSession from, BridgeMessage message)
     {
-        if (message.Type == MessageType.PhotosChanged) { Changed?.Invoke(); return; }
+        if (message.Type == MessageType.PhotosChanged)
+        {
+            // Only the phone being browsed matters; another phone's changes are picked up when it's chosen.
+            if (ReferenceEquals(_host.CurrentSession, from)) Changed?.Invoke();
+            return;
+        }
         string? requestId = null;
         try { requestId = message.Payload["requestId"]?.GetValue<string>(); }
         catch (InvalidOperationException) { } // not a string: not ours
-        if (requestId is not null && _pending.TryGetValue(requestId, out var waiting)) waiting.Answer.TrySetResult(message);
+        // An answer counts only from the phone that was asked.
+        if (requestId is not null && _pending.TryGetValue(requestId, out var waiting) && ReferenceEquals(waiting.Session, from))
+            waiting.Answer.TrySetResult(message);
     }
 
+    /// <summary>Cache key: photo ids are only unique on one phone.</summary>
+    private static string CacheKey(BridgeSession? session, string id) => $"{session?.Device.DeviceId}|{id}";
+
     /// <summary>Sends a request and waits for the answer with the same request id (null: no phone, dropped, or timed out).</summary>
-    private async Task<BridgeMessage?> RequestAsync(string type, Func<string, object> payload, TimeSpan timeout, CancellationToken ct)
+    private async Task<BridgeMessage?> RequestAsync(string type, Func<string, object> payload, TimeSpan timeout, CancellationToken ct, BridgeSession? to = null)
     {
-        var session = _host.CurrentSession;
+        var session = to ?? _host.CurrentSession;
         if (session is not { IsRunning: true, SupportsPhotos: true }) return null;
         Subscribe(session);
         var requestId = Guid.NewGuid().ToString("N");
@@ -134,23 +147,26 @@ public sealed class PhotoBrowser
     public Task<PhotoThumb> ThumbnailAsync(string id, CancellationToken ct = default)
     {
         if (id is null || !IdPattern.IsMatch(id)) return Task.FromResult(new PhotoThumb(PhotoStatus.Invalid, null));
+        var session = _host.CurrentSession; // the preview is asked of, and cached for, this phone
+        var key = CacheKey(session, id);
         lock (_thumbLru)
         {
-            if (_thumbIndex.TryGetValue(id, out var node))
+            if (_thumbIndex.TryGetValue(key, out var node))
             {
                 _thumbLru.Remove(node);
                 _thumbLru.AddFirst(node);
                 return Task.FromResult(new PhotoThumb(PhotoStatus.Ok, node.Value.Jpeg));
             }
         }
-        return _thumbsInFlight.GetOrAdd(id, _ => FetchThumbAsync(id, ct));
+        if (session is null) return Task.FromResult(Report("thumb", PhotoStatus.Unavailable, new PhotoThumb(PhotoStatus.Unavailable, null)));
+        return _thumbsInFlight.GetOrAdd(key, _ => FetchThumbAsync(session, id, key, ct));
     }
 
-    private async Task<PhotoThumb> FetchThumbAsync(string id, CancellationToken ct)
+    private async Task<PhotoThumb> FetchThumbAsync(BridgeSession session, string id, string key, CancellationToken ct)
     {
         try
         {
-            var reply = await RequestAsync(MessageType.PhotosThumb, r => new PhotosThumbPayload(r, id), _timeout, ct);
+            var reply = await RequestAsync(MessageType.PhotosThumb, r => new PhotosThumbPayload(r, id), _timeout, ct, session);
             if (reply is null) return Report("thumb", PhotoStatus.Unavailable, new PhotoThumb(PhotoStatus.Unavailable, null));
             PhotosThumbnailPayload t;
             try { t = reply.PayloadAs<PhotosThumbnailPayload>(); }
@@ -161,14 +177,14 @@ public sealed class PhotoBrowser
             if (jpeg is null || t.Id != id) return Report("thumb", PhotoStatus.Error, new PhotoThumb(PhotoStatus.Error, null));
             lock (_thumbLru)
             {
-                if (!_thumbIndex.ContainsKey(id)) _thumbIndex[id] = _thumbLru.AddFirst((id, jpeg));
+                if (!_thumbIndex.ContainsKey(key)) _thumbIndex[key] = _thumbLru.AddFirst((key, jpeg));
                 while (_thumbLru.Count > ThumbCacheSize) { _thumbIndex.Remove(_thumbLru.Last!.Value.Id); _thumbLru.RemoveLast(); }
             }
             return Report("thumb", status, new PhotoThumb(PhotoStatus.Ok, jpeg));
         }
         finally
         {
-            _thumbsInFlight.TryRemove(id, out _);
+            _thumbsInFlight.TryRemove(key, out _);
         }
     }
 

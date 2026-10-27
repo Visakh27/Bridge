@@ -14,12 +14,19 @@ namespace Bridge.Core;
 ///   • anything else / unknown  → error + close.
 /// Each connection is handled independently, so one stalled or malicious
 /// client can't block pairing or reconnects.
+///
+/// Several paired phones can be connected at once (up to <see cref="MaxConnectedPhones"/>),
+/// one session each; a phone reconnecting replaces only its own stale session.
+/// One of them is the <em>active</em> phone (<see cref="CurrentSession"/>): the one
+/// the user picked, else the most recently connected. Sends, photos and handoffs
+/// without an explicit phone go to it.
 /// </summary>
 public sealed class BridgeHost : IAsyncDisposable
 {
     public static readonly string[] LocalFeatures = [Features.Files, Features.Clipboard, Features.Notifications, Features.FilesResume, Features.FilesFolders, Features.NotificationsActions, Features.Photos, Features.Handoff];
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan FirstMessageTimeout = TimeSpan.FromSeconds(30);
+    public const int MaxConnectedPhones = 8;
 
     private readonly DeviceIdentity _identity;
     private readonly IPairedDeviceStore _store;
@@ -29,7 +36,10 @@ public sealed class BridgeHost : IAsyncDisposable
     private string _downloadDir;
     private readonly SemaphoreSlim _sessionLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
-    private BridgeSession? _current;
+    private readonly object _gate = new();
+    /// <summary>Live sessions by phone, oldest first (the last one is the most recently connected).</summary>
+    private readonly List<BridgeSession> _sessions = [];
+    private string? _activeDeviceId;
 
     public BridgeHost(DeviceIdentity identity, IPairedDeviceStore store, PairingService pairing,
         FileTransferService fileTransfer, ClipboardSyncService clipboard, string downloadDir)
@@ -42,7 +52,51 @@ public sealed class BridgeHost : IAsyncDisposable
         _downloadDir = downloadDir;
     }
 
-    public BridgeSession? CurrentSession => Volatile.Read(ref _current);
+    /// <summary>The active phone's session: the picked phone if it's connected, else the most recently connected one.</summary>
+    public BridgeSession? CurrentSession
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_activeDeviceId is { } id && _sessions.FindLast(s => s.Device.DeviceId == id) is { } picked) return picked;
+                return _sessions.Count > 0 ? _sessions[^1] : null;
+            }
+        }
+    }
+
+    /// <summary>Every connected phone's session, oldest connection first.</summary>
+    public IReadOnlyList<BridgeSession> Sessions { get { lock (_gate) return [.. _sessions]; } }
+
+    /// <summary>The session of one phone, or null if it isn't connected.</summary>
+    public BridgeSession? SessionFor(string? deviceId)
+    {
+        if (deviceId is null) return null;
+        lock (_gate) return _sessions.FindLast(s => s.Device.DeviceId == deviceId);
+    }
+
+    /// <summary>
+    /// The phone the user picked (null = follow the most recently connected). It needn't be
+    /// connected: while it's away, <see cref="CurrentSession"/> falls back to another phone.
+    /// </summary>
+    public string? ActiveDeviceId
+    {
+        get { lock (_gate) return _activeDeviceId; }
+        set
+        {
+            BridgeSession? before, after;
+            lock (_gate)
+            {
+                before = CurrentSession;
+                _activeDeviceId = value;
+                after = CurrentSession;
+            }
+            if (!ReferenceEquals(before, after)) ActiveSessionChanged?.Invoke(after);
+        }
+    }
+
+    /// <summary>The active phone changed (picked, connected, or the active one left). Null: no phone connected.</summary>
+    public event Action<BridgeSession?>? ActiveSessionChanged;
 
     /// <summary>Where received files go; a change applies to the next file, also in a live session.</summary>
     public string DownloadDirectory
@@ -155,19 +209,38 @@ public sealed class BridgeHost : IAsyncDisposable
             DeviceName = paired.DeviceName,
             PeerFeatures = capabilities.PayloadAs<CapabilitiesPayload>().Features ?? [],
         };
-        await channel.SendAsync(BridgeMessage.Create(MessageType.CapabilitiesAdvertise, new CapabilitiesPayload(LocalFeatures)), ct);
-
-        var session = new BridgeSession(channel, device, _fileTransfer, _clipboard, () => DownloadDirectory);
-        session.Ended += OnSessionEnded;
-
         await _sessionLock.WaitAsync(ct);
         try
         {
-            // One phone at a time: a reconnect replaces a stale (half-open) session.
-            var previous = Interlocked.Exchange(ref _current, session);
-            if (previous is not null) await previous.DisposeAsync();
+            BridgeSession? previous;
+            bool full;
+            lock (_gate)
+            {
+                // A phone reconnecting replaces its own stale (half-open) session; a new phone needs a free place.
+                previous = _sessions.FindLast(s => s.Device.DeviceId == device.DeviceId);
+                full = previous is null && _sessions.Count >= MaxConnectedPhones;
+            }
+            if (full)
+            {
+                await SendErrorAsync(channel, ErrorCodes.TooManyDevices, $"This PC already has {MaxConnectedPhones} phones connected", ct);
+                ConnectionRejected?.Invoke("Too many phones connected");
+                return false;
+            }
+            await channel.SendAsync(BridgeMessage.Create(MessageType.CapabilitiesAdvertise, new CapabilitiesPayload(LocalFeatures)), ct);
+            var session = new BridgeSession(channel, device, _fileTransfer, _clipboard, () => DownloadDirectory);
+            session.Ended += OnSessionEnded;
+            if (previous is not null) await previous.DisposeAsync(); // ends it (and removes it) before the new one is listed
+            BridgeSession? activeBefore;
+            lock (_gate)
+            {
+                activeBefore = CurrentSession;
+                if (previous is not null) _sessions.Remove(previous);
+                _sessions.Add(session);
+            }
             SessionStarted?.Invoke(session);
             session.Start();
+            var activeAfter = CurrentSession;
+            if (!ReferenceEquals(activeBefore, activeAfter)) ActiveSessionChanged?.Invoke(activeAfter);
         }
         finally
         {
@@ -178,16 +251,24 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnSessionEnded(BridgeSession session)
     {
-        Interlocked.CompareExchange(ref _current, null, session);
+        BridgeSession? activeBefore, activeAfter;
+        bool removed;
+        lock (_gate)
+        {
+            activeBefore = CurrentSession;
+            removed = _sessions.Remove(session);
+            activeAfter = CurrentSession;
+        }
         SessionEnded?.Invoke(session);
+        if (removed && !ReferenceEquals(activeBefore, activeAfter)) ActiveSessionChanged?.Invoke(activeAfter);
     }
 
     /// <summary>Forgets a paired device and drops its connection (docs/security.md, Revocation).</summary>
     public async Task RevokeAsync(string deviceId)
     {
         await _store.RevokeAsync(deviceId);
-        var session = CurrentSession;
-        if (session is not null && session.Device.DeviceId == deviceId) await session.DisposeAsync();
+        lock (_gate) { if (_activeDeviceId == deviceId) _activeDeviceId = null; }
+        if (SessionFor(deviceId) is { } session) await session.DisposeAsync();
     }
 
     private static async Task SendErrorAsync(EncryptedChannel channel, string code, string message, CancellationToken ct)
@@ -199,7 +280,6 @@ public sealed class BridgeHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
-        var session = Interlocked.Exchange(ref _current, null);
-        if (session is not null) await session.DisposeAsync();
+        foreach (var session in Sessions) await session.DisposeAsync();
     }
 }

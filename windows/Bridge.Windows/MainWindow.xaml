@@ -52,18 +52,22 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel x:Name="PairingPanel" Grid.Column="0" Spacing="12" HorizontalAlignment="Center">
-                <TextBlock Text="Scan with the Bridge Android app" HorizontalAlignment="Center" TextWrapping="Wrap" />
+                <TextBlock x:Name="PairingTitleText" Text="Scan with the Bridge Android app" HorizontalAlignment="Center" TextWrapping="Wrap" />
                 <Image x:Name="QrImage" Width="220" Height="220" />
                 <TextBlock x:Name="QrInfoText" HorizontalAlignment="Center" TextWrapping="Wrap" FontSize="12" Opacity="0.6" />
                 <Button x:Name="RegenerateButton" Content="New code" Click="OnRegenerateQrClicked" HorizontalAlignment="Center" />
+                <Button x:Name="PairingBackButton" Content="Back to your phones" Click="OnPairingBackClicked" HorizontalAlignment="Center" Visibility="Collapsed" />
             </StackPanel>
 
             <StackPanel x:Name="DevicePanel" Grid.Column="0" Spacing="12" Visibility="Collapsed">
+                <ComboBox x:Name="PhoneSelector" Header="Send to" HorizontalAlignment="Stretch" Visibility="Collapsed"
+                          SelectionChanged="OnPhoneSelected" />
                 <TextBlock x:Name="DeviceNameText" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBlock x:Name="BatteryText" Opacity="0.8" />
                 <ToggleSwitch x:Name="ClipboardToggle" Header="Sync clipboard" Toggled="OnClipboardToggled" />
                 <Button Content="Open received files" Click="OnOpenReceivedClicked" />
                 <Button Content="Forget this phone" Click="OnForgetClicked" />
+                <HyperlinkButton Content="Pair another phone" Click="OnPairAnotherClicked" />
             </StackPanel>
 
             <Grid Grid.Column="1" RowSpacing="12">
@@ -129,6 +133,11 @@
         <ScrollViewer Grid.Row="1" x:Name="SettingsPanel" Visibility="Collapsed">
             <StackPanel Spacing="12" MaxWidth="560" HorizontalAlignment="Left">
                 <TextBlock Text="Settings" FontSize="22" FontWeight="SemiBold" />
+
+                <TextBlock Text="Paired phones" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <StackPanel x:Name="PairedPhonesPanel" Spacing="6" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="Up to 8 phones can be connected at once. Files, links and photos go to the phone chosen under Send to; your PC's clipboard goes to every connected phone with clipboard sync, but one phone's clipboard is never passed on to another." />
 
                 <TextBlock Text="Received files" FontWeight="SemiBold" Margin="0,8,0,0" />
                 <TextBlock x:Name="DownloadFolderText" TextWrapping="Wrap" Opacity="0.8" />

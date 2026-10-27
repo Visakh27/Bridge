@@ -117,8 +117,23 @@
    synced back. A peer may hand over at most 20 a minute; repeats of the same
    request are answered without acting twice. Logs record direction, kind
    and outcome only, never the link or text.
+16. **Several devices** — each phone is paired, authenticated and revoked on
+   its own; forgetting one phone (on the PC) or one PC (on the phone) never
+   touches the others. A PC accepts at most 8 phones at once. Phones connected
+   to the same PC may belong to different people, so nothing from one phone
+   is passed to another: one phone's clipboard goes only to the PC (not
+   relayed to the other phones), answers to photo, notification and handoff
+   requests count only from the phone that was asked, a reply typed in a
+   toast goes only to the phone the notification came from, and toasts,
+   previews and handoff limits are kept per phone. The PC's own clipboard does
+   go to every connected phone with clipboard sync on; the Settings panel says
+   so. Logs record how many phones are connected and hashed ids, never names.
 
 ## Known limits (MVP)
+
+- A phone connected to a fallback PC stays with it until that connection
+  ends; it doesn't jump back to the chosen PC the moment that one comes into
+  reach ("Use this PC" in Settings switches at once).
 
 - A handed-over link is still a link to any web site: Bridge checks its form,
   not its destination. The notification shows the real host so the user can

@@ -130,6 +130,8 @@ object ErrorCodes {
     const val DEVICE_UNPAIRED = "DEVICE_UNPAIRED"
     const val TRANSFER_INTERRUPTED = "TRANSFER_INTERRUPTED"
     const val PERMISSION_DENIED = "PERMISSION_DENIED"
+    /** The PC already has as many phones connected as it allows. */
+    const val TOO_MANY_DEVICES = "TOO_MANY_DEVICES"
 }
 
 /** One photo. [id] is the MediaStore id (digits); [takenAt] is epoch ms. */

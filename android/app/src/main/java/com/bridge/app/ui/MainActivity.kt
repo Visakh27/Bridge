@@ -72,21 +72,28 @@ class MainActivity : ComponentActivity() {
                             deviceName = Build.MODEL,
                             notice = if (connection.status == BridgeConnectionService.Status.UNPAIRED)
                                 "${connection.pcName ?: "Your PC"} no longer recognises this phone. Scan a new code to pair again." else null,
-                        ) {
+                        ) { deviceId ->
                             paired = true
                             screen = "dashboard"
+                            BridgeConnectionService.switchToPc(this@MainActivity, deviceId)
+                            BridgeConnectionService.start(this@MainActivity)
+                        }
+                        screen == "pair" -> PairingScreen(
+                            pairingClient = pairingClient,
+                            deviceName = Build.MODEL,
+                            onCancel = { screen = "settings" },
+                        ) { deviceId ->
+                            screen = "settings"
+                            // Just paired: connect to the new PC now (and prefer it).
+                            BridgeConnectionService.switchToPc(this@MainActivity, deviceId)
                             BridgeConnectionService.start(this@MainActivity)
                         }
                         screen == "settings" -> SettingsScreen(
                             state = connection,
                             onBack = { screen = "dashboard" },
                             onChooseApps = { screen = "apps" },
-                            onForget = {
-                                lifecycleScope.launch {
-                                    BridgeConnectionService.forgetPc(this@MainActivity)
-                                    paired = false
-                                }
-                            },
+                            onForgotten = { left -> if (left == 0) paired = false },
+                            onPairAnother = { screen = "pair" },
                         )
                         screen == "apps" -> NotificationAppsScreen(onBack = { screen = "settings" })
                         else -> DashboardScreen(state = connection, onSettings = { screen = "settings" })

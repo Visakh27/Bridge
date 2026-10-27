@@ -8,7 +8,8 @@ folder transfer that resumes after a dropped connection, text clipboard sync,
 a Windows system-tray app, an Android foreground connection service, and
 notification mirroring with actions (reply, the app's own buttons, dismiss,
 per-app filtering), browsing the phone's photos from the PC (opt-in), File Explorer "Send to" /
-"Share" to the phone, handing links and text between the devices, first-run guides,
+"Share" to the phone, handing links and text between the devices, several phones on one PC and
+several PCs for one phone, first-run guides,
 settings, a privacy-safe diagnostics log,
 recent transfers with retry, and MSIX packaging — all speaking one shared, versioned JSON protocol
 (`protocol/protocol.md`).

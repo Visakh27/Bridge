@@ -67,7 +67,7 @@ public class SessionAndStoreTests
     public async Task Clipboard_Retries_Text_That_Failed_To_Send()
     {
         var clip = new FakeClipboard();
-        var sync = new ClipboardSyncService(clip) { Enabled = true, PeerSupportsClipboard = true };
+        var sync = new ClipboardSyncService(clip) { Enabled = true };
         var failures = 0;
         sync.SendFailed += _ => failures++;
 
@@ -80,7 +80,7 @@ public class SessionAndStoreTests
         var resp = await respTask;
         await resp.DisposeAsync();
         await init.DisposeAsync();
-        sync.Channel = resp;
+        sync.AddPeer(resp, supportsClipboard: true);
 
         clip.Copy("same text");
         await Task.Delay(100);
