@@ -41,8 +41,11 @@ fun PairingScreen(
     pairingClient: PairingClient,
     deviceName: String,
     notice: String? = null,
-    onPaired: () -> Unit,
+    /** Set when pairing another PC from Settings: shows Cancel and handles Back. */
+    onCancel: (() -> Unit)? = null,
+    onPaired: (deviceId: String) -> Unit,
 ) {
+    if (onCancel != null) androidx.activity.compose.BackHandler(onBack = onCancel)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var statusText by remember { mutableStateOf("Point your camera at the QR code shown on your PC") }
@@ -65,7 +68,7 @@ fun PairingScreen(
                         val log = (context.applicationContext as BridgeApplication).diagnostics
                         log.info("pair.succeeded", LogField.id("peer", pairing.device.deviceId, log))
                         statusText = "Paired with ${pairing.device.deviceName}"
-                        onPaired()
+                        onPaired(pairing.device.deviceId)
                     }
                     .onFailure { error ->
                         (context.applicationContext as BridgeApplication).diagnostics.warn("pair.failed", LogField.error(error))
@@ -77,7 +80,8 @@ fun PairingScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Pair with your PC", style = MaterialTheme.typography.headlineSmall)
+        if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel") }
+        Text(if (onCancel != null) "Pair another PC" else "Pair with your PC", style = MaterialTheme.typography.headlineSmall)
         if (notice != null) {
             Spacer(Modifier.height(8.dp))
             Text(notice, color = MaterialTheme.colorScheme.error)

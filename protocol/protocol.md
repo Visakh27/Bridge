@@ -78,8 +78,18 @@ after 5 minutes.
 **Session** (paired phone connecting or reconnecting):
 handshake → phone sends `capabilities.advertise` → PC verifies the phone is
 paired and its signature checks out, then replies `capabilities.advertise`
-(or `error` with `DEVICE_UNPAIRED` / `AUTH_FAILED` and closes) → either side
-may now send any message the peer advertised.
+(or `error` with `DEVICE_UNPAIRED` / `AUTH_FAILED` / `TOO_MANY_DEVICES` and
+closes) → either side may now send any message the peer advertised.
+
+**Several devices.** A PC accepts sessions from several paired phones at once
+(at most 8; a ninth gets `TOO_MANY_DEVICES`, which the phone treats like an
+unreachable PC: it tries another paired PC or retries later, without running
+discovery). Each phone has one session; a phone reconnecting replaces its own
+stale session only. A phone paired with several PCs keeps one session at a
+time. Nothing on the wire changes: every message belongs to the session it
+arrives on, so request ids, notification keys, transfer ids and handoff ids
+need only be unique per session, and an answer counts only when it arrives on
+the session the request was sent on.
 
 ## Discovery (UDP 47821)
 

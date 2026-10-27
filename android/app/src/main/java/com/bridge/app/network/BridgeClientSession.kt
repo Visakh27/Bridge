@@ -20,6 +20,9 @@ import kotlin.coroutines.coroutineContext
 /** The PC no longer recognises this phone (it was forgotten there): re-pair. */
 class DeviceUnpairedException(message: String) : Exception(message)
 
+/** The PC has as many phones connected as it allows; try again later (or another PC). */
+class PcFullException(message: String) : Exception(message)
+
 /**
  * One connection from the phone to its paired PC — the phone-side counterpart
  * of Bridge.Core.BridgeSession. Platform-agnostic so it can be tested on the
@@ -90,6 +93,7 @@ class BridgeClientSession(
                     MessageType.ERROR -> {
                         val error = reply.payloadAs<ErrorPayload>()
                         if (error.code == ErrorCodes.DEVICE_UNPAIRED) throw DeviceUnpairedException(error.message)
+                        if (error.code == ErrorCodes.TOO_MANY_DEVICES) throw PcFullException(error.message)
                         throw AuthenticationException(error.message)
                     }
                     else -> throw IOException("Unexpected first message ${reply.type}")

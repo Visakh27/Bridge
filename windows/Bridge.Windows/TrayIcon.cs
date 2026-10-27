@@ -48,6 +48,12 @@ public sealed class TrayIcon : IDisposable
         return new GeneratedIconSource { Text = "B", Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 0, 120, 212)) };
     }
 
+    /// <summary>Hover text: which phones are connected.</summary>
+    public void SetToolTip(string text)
+    {
+        try { _icon.ToolTipText = text; } catch (Exception) { }
+    }
+
     public void Dispose() => _icon.Dispose();
 
     private sealed class RelayCommand(Action action) : ICommand

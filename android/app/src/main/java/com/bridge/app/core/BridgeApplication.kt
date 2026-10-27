@@ -32,6 +32,11 @@ class BridgeApplication : Application() {
         }
     }
 
+    /** Which paired PC to connect to when there are several (one connection at a time). */
+    val pcChooser: com.bridge.app.network.PcChooser by lazy {
+        com.bridge.app.network.PcChooser(com.bridge.app.service.SharedPrefsPcPreferences(this))
+    }
+
     /** Links and text from the PC (and answers to the ones this phone sends). */
     val handoffInbox: com.bridge.app.handoff.HandoffInbox by lazy {
         val notifier = com.bridge.app.handoff.HandoffNotifier(this)

@@ -46,6 +46,8 @@ class BridgeConnectionService : Service() {
     data class State(
         val status: Status = Status.DISCONNECTED,
         val pcName: String? = null,
+        /** The PC connected (or being connected) to. */
+        val pcId: String? = null,
         val lastTransfer: String? = null,
         /** Why the last connection attempt failed, in plain words (null after connecting). */
         val lastError: String? = null,
@@ -199,12 +201,38 @@ class BridgeConnectionService : Service() {
             app.photoService.settingChanged { message -> instance?.session?.takeIf { it.peerSupports(Features.PHOTOS) }?.send(message) }
         }
 
-        /** Forgets the paired PC on this phone and stops connecting to it. */
-        suspend fun forgetPc(context: Context) {
+        /** Every paired PC, in the order the phone tries them (the chosen one first). */
+        suspend fun pairedPcs(context: Context): List<PairedDevice> {
+            val app = context.applicationContext as BridgeApplication
+            return app.pcChooser.order(SharedPrefsPairedDeviceStore(context).list())
+        }
+
+        /** The PC the user chose in Settings (null: whichever was connected last). */
+        fun pinnedPcId(context: Context): String? = (context.applicationContext as BridgeApplication).pcChooser.pinnedPcId
+
+        /** "Use this PC": connect to [deviceId] now (leaving the current PC) and prefer it from now on. */
+        fun switchToPc(context: Context, deviceId: String) {
+            val app = context.applicationContext as BridgeApplication
+            app.pcChooser.pin(deviceId)
+            val loop = instance?.reconnectLoop
+            if (loop == null) start(context)
+            else if (_state.value.pcId != deviceId || _state.value.status != Status.CONNECTED) loop.reconsider()
+        }
+
+        /** Forgets one paired PC on this phone; returns how many are left. With none left, stops connecting. */
+        suspend fun forgetPc(context: Context, deviceId: String): Int {
+            val app = context.applicationContext as BridgeApplication
             val store = SharedPrefsPairedDeviceStore(context)
-            store.current()?.let { store.revoke(it.deviceId) }
-            instance?.stopSelf()
-            _state.value = State(Status.DISCONNECTED)
+            store.revoke(deviceId)
+            app.pcChooser.forgotten(deviceId)
+            val left = store.list().size
+            if (left == 0) {
+                instance?.stopSelf()
+                _state.value = State(Status.DISCONNECTED)
+            } else if (_state.value.pcId == deviceId) {
+                instance?.reconnectLoop?.reconsider() // drop it and go on to another PC
+            }
+            return left
         }
     }
 
@@ -260,6 +288,7 @@ class BridgeConnectionService : Service() {
         val loop = ReconnectLoop(
             store = store,
             discovery = PcDiscovery(targets = network::broadcastTargets),
+            chooser = app.pcChooser,
             sessionFactory = { pc ->
                 BridgeClientSession(
                     identity, pc, fileTransfer, clipboardSync, downloadDir(),
@@ -268,7 +297,8 @@ class BridgeConnectionService : Service() {
                         override fun onConnected(peerFeatures: List<String>) {
                             connectedAt = System.currentTimeMillis()
                             PhoneDiagnostics.sessionStarted(diagnostics, pc.deviceId, peerFeatures)
-                            _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName, lastError = null, nextRetryAt = null) }
+                            app.pcChooser.connected(pc.deviceId)
+                            _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName, pcId = pc.deviceId, lastError = null, nextRetryAt = null) }
                             updateNotification(getString(R.string.connected_service_text, pc.deviceName))
                         }
                         override fun onPeerError(error: ErrorPayload) {
@@ -289,7 +319,7 @@ class BridgeConnectionService : Service() {
             listener = object : ReconnectLoop.Listener {
                 override fun onConnecting(pc: PairedDevice) {
                     PhoneDiagnostics.connectAttempt(diagnostics, pc.deviceId)
-                    _state.update { it.copy(status = Status.CONNECTING, pcName = pc.deviceName, nextRetryAt = null) }
+                    _state.update { it.copy(status = Status.CONNECTING, pcName = pc.deviceName, pcId = pc.deviceId, nextRetryAt = null) }
                     updateNotification(getString(R.string.connecting_service_text))
                 }
                 override fun onAddressChanged(pc: PairedDevice) {
@@ -303,10 +333,12 @@ class BridgeConnectionService : Service() {
                 override fun onRetryScheduled(delayMs: Long) {
                     _state.update { it.copy(nextRetryAt = System.currentTimeMillis() + delayMs) }
                 }
-                override fun onUnpaired(pc: PairedDevice) {
-                    diagnostics.warn("pc.unpaired", LogField.id("peer", pc.deviceId, diagnostics))
-                    // The PC forgot this phone: stop retrying and ask the user to pair again.
-                    _state.value = State(Status.UNPAIRED, pc.deviceName)
+                override fun onUnpaired(pc: PairedDevice, remaining: Int) {
+                    diagnostics.warn("pc.unpaired", LogField.id("peer", pc.deviceId, diagnostics), LogField.num("pcs_left", remaining.toLong()))
+                    // That PC forgot this phone. With none left, ask the user to pair again;
+                    // otherwise say so and carry on with the other PCs.
+                    if (remaining == 0) _state.value = State(Status.UNPAIRED, pc.deviceName)
+                    else _state.update { it.copy(lastError = "${pc.deviceName} no longer recognises this phone, so it was removed. Pair again from Settings to use it.") }
                 }
             },
         )
@@ -337,6 +369,7 @@ class BridgeConnectionService : Service() {
     @Volatile private var lastRecentPush = 0L
 
     private fun friendlyError(e: Exception, pcName: String): String = when (e) {
+        is PcFullException -> "$pcName already has the most phones it allows connected. Bridge will try again."
         is AuthenticationException -> "Another device answered at $pcName's address, so Bridge didn't connect."
         is java.net.SocketTimeoutException -> "$pcName didn't answer. Is Bridge running on it?"
         is java.net.ConnectException -> "Couldn't reach $pcName. Is Bridge running on it, on the same Wi-Fi?"

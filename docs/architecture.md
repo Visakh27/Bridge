@@ -67,6 +67,20 @@ Bridge.Security ────────┤    platform)         ├────
   browser, and sends from the Share menu and the tray's "Send clipboard to
   phone"; Android's `HandoffNotifier` posts the link notification or sets the
   clipboard, and `MainActivity` sends text and links shared from other apps.
+- **Several devices** — Windows: `BridgeHost` keeps one session per connected
+  phone (at most 8) and an *active* phone (`CurrentSession`: the one the user
+  picked, else the most recently connected) that sends, photos, handoffs and
+  the tray act on; `SessionFor(deviceId)` reaches a particular phone.
+  `ClipboardSyncService` sends the PC's clipboard to every connected phone
+  with sync and never relays one phone's clipboard to another;
+  `NotificationActionRouter` and `NotificationToastCommand` carry the phone a
+  notification came from, so a reply goes back to it (waiting for that phone,
+  never another); `PhotoBrowser` and `HandoffService` accept answers only from
+  the phone that was asked; `ExplorerSendQueue` keeps a waiting send for the
+  phone the user picked. Android: `network/PcChooser` orders the paired PCs
+  (the user's choice, the last one used, then newest pairing) and
+  `ReconnectLoop` tries them in turn, one connection at a time, forgetting
+  only a PC that says it no longer knows the phone.
 - **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
   `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
   `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and
@@ -80,7 +94,7 @@ Bridge.Security ────────┤    platform)         ├────
 ## Error codes
 
 `CONNECTION_TIMEOUT`, `AUTH_FAILED`, `DEVICE_UNPAIRED`, `TRANSFER_INTERRUPTED`,
-`PERMISSION_DENIED` — carried in `error` messages as `{"code","message"}` and
+`PERMISSION_DENIED`, `TOO_MANY_DEVICES` — carried in `error` messages as `{"code","message"}` and
 translated to user-friendly text at the UI layer; raw exceptions/socket errors
 are never shown to the user.
 

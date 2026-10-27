@@ -32,7 +32,12 @@ public sealed partial class MainWindow : Window
     private readonly NotificationActionRouter _notificationActions;
     private readonly CancellationTokenSource _cts = new();
     private readonly DispatcherQueueTimer _qrTimer;
+    /// <summary>The active phone's session (what drops, Retry and Photos use); null when no phone is connected.</summary>
     private BridgeSession? _session;
+    private IPairedDeviceStore _store = null!;
+    /// <summary>The QR code is showing to pair another phone while one is connected.</summary>
+    private bool _pairingAnother;
+    private bool _fillingPhoneSelector;
     private readonly SettingsStore _settings;
     private readonly DiagnosticsLog _diagnostics;
     private readonly TransferHistory _history = new();
@@ -67,6 +72,7 @@ public sealed partial class MainWindow : Window
         _fileTransfer = new FileTransferService(new TransferStateStore(dataDir));
         var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "identity.bin"));
         var store = new JsonPairedDeviceStore(Path.Combine(dataDir, "paired_devices.json"));
+        _store = store;
         _pairing = new PairingService(identity, store, Environment.MachineName);
         _clipboardAccess = new WindowsClipboardAccess(DispatcherQueue);
         _clipboard = new ClipboardSyncService(_clipboardAccess);
@@ -127,10 +133,13 @@ public sealed partial class MainWindow : Window
         _host.DevicePaired += device => DispatcherQueue.TryEnqueue(() =>
         {
             StatusText.Text = $"Paired with {device.DeviceName} — connecting…";
+            _pairingAnother = false; // back to the phones once it connects
             _ = ShowQrCodeAsync(); // the old code is spent
+            _ = RenderPairedPhonesAsync();
         });
         _host.SessionStarted += OnSessionStarted;
         _host.SessionEnded += OnSessionEnded;
+        _host.ActiveSessionChanged += _ => DispatcherQueue.TryEnqueue(RefreshPhones);
 
         AppWindow.Closing += (sender, args) =>
         {
@@ -142,7 +151,7 @@ public sealed partial class MainWindow : Window
         // Pairing codes expire after 5 minutes; refresh shortly before.
         _qrTimer = DispatcherQueue.CreateTimer();
         _qrTimer.Interval = PairingService.DefaultTokenLifetime - TimeSpan.FromSeconds(30);
-        _qrTimer.Tick += (_, _) => { if (_session is null) _ = ShowQrCodeAsync(); };
+        _qrTimer.Tick += (_, _) => { if (PairingPanel.Visibility == Visibility.Visible) _ = ShowQrCodeAsync(); };
         _qrTimer.Start();
 
         _ = ShowQrCodeAsync();
@@ -192,7 +201,7 @@ public sealed partial class MainWindow : Window
     {
         var paired = await store.ListAsync();
         if (paired.Count > 0 && _session is null)
-            StatusText.Text = $"Waiting for {paired[^1].DeviceName} to connect";
+            StatusText.Text = paired.Count == 1 ? $"Waiting for {paired[0].DeviceName} to connect" : $"Waiting for your {paired.Count} phones to connect";
     }
 
     private void OnRegenerateQrClicked(object sender, RoutedEventArgs e) => _ = ShowQrCodeAsync();
@@ -200,21 +209,13 @@ public sealed partial class MainWindow : Window
     private void OnSessionStarted(BridgeSession session)
     {
         session.StatusChanged += OnDeviceStatusChanged;
-        session.NotificationReceived += ShowPhoneNotification;
-        session.NotificationDismissed += RemovePhoneNotification;
+        session.NotificationReceived += note => ShowPhoneNotification(session.Device, note);
+        session.NotificationDismissed += key => RemovePhoneNotification(session.Device.DeviceId, key);
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (_session?.Device.DeviceId != session.Device.DeviceId) { _photos.ClearCache(); _photosStale = true; }
-            _session = session;
             _clipboard.Enabled = ClipboardToggle.IsOn;
-            if (PhotosPanel.Visibility == Visibility.Visible && _photosStale) _ = ReloadPhotosAsync();
-            PairingPanel.Visibility = Visibility.Collapsed;
-            DevicePanel.Visibility = Visibility.Visible;
-            DropZoneText.Text = "Drop files or folders here to send them to your phone";
-            RenderRecent();
-            DeviceNameText.Text = session.Device.DeviceName;
-            StatusText.Text = "Connected";
-            BatteryText.Text = "Battery unknown";
+            RefreshPhones();
+            _ = RenderPairedPhonesAsync();
         });
     }
 
@@ -222,25 +223,146 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!ReferenceEquals(_session, session)) return; // already replaced by a reconnect
-            _session = null;
-            StatusText.Text = $"{session.Device.DeviceName} disconnected — waiting for it to reconnect";
-            DevicePanel.Visibility = Visibility.Collapsed;
-            PairingPanel.Visibility = Visibility.Visible;
-            DropZoneText.Text = "Connect your phone to send files";
-            RenderRecent();
-            _ = ShowQrCodeAsync();
+            RefreshPhones();
+            _ = RenderPairedPhonesAsync();
+            if (_host.Sessions.Count == 0)
+                StatusText.Text = $"{session.Device.DeviceName} disconnected — waiting for it to reconnect";
         });
+    }
+
+    /// <summary>Shows the connected phones and the active one. Runs on the UI thread after any change.</summary>
+    private void RefreshPhones()
+    {
+        var sessions = _host.Sessions.Where(s => s.IsRunning).ToList();
+        var active = _host.CurrentSession is { IsRunning: true } a ? a : null;
+        if (!ReferenceEquals(_session, active))
+        {
+            _photosStale = true; // previews are cached per phone; the list is not
+            if (PhotosPanel.Visibility == Visibility.Visible) _ = ReloadPhotosAsync();
+        }
+        _session = active;
+
+        _fillingPhoneSelector = true;
+        try
+        {
+            PhoneSelector.Items.Clear();
+            foreach (var s in sessions.OrderBy(s => s.Device.DeviceName, StringComparer.CurrentCultureIgnoreCase))
+            {
+                var item = new ComboBoxItem { Content = s.Device.DeviceName, Tag = s.Device.DeviceId };
+                PhoneSelector.Items.Add(item);
+                if (ReferenceEquals(s, active)) PhoneSelector.SelectedItem = item;
+            }
+            PhoneSelector.Visibility = sessions.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        finally { _fillingPhoneSelector = false; }
+
+        var showDevices = active is not null && !_pairingAnother;
+        // Back to the pairing code after the last phone left: show a fresh one (the old one may be spent).
+        if (!showDevices && DevicePanel.Visibility == Visibility.Visible) _ = ShowQrCodeAsync();
+        DevicePanel.Visibility = showDevices ? Visibility.Visible : Visibility.Collapsed;
+        PairingPanel.Visibility = showDevices ? Visibility.Collapsed : Visibility.Visible;
+        PairingBackButton.Visibility = active is not null && _pairingAnother ? Visibility.Visible : Visibility.Collapsed;
+        PairingTitleText.Text = active is not null ? "Scan with the Bridge app on the other phone" : "Scan with the Bridge Android app";
+        if (active is not null)
+        {
+            DeviceNameText.Text = active.Device.DeviceName;
+            ShowBattery(active.Device);
+            StatusText.Text = sessions.Count switch
+            {
+                1 => "Connected",
+                2 => $"Connected to {sessions[0].Device.DeviceName} and {sessions[1].Device.DeviceName}",
+                _ => $"{sessions.Count} phones connected",
+            };
+            DropZoneText.Text = sessions.Count > 1
+                ? $"Drop files or folders here to send them to {active.Device.DeviceName}"
+                : "Drop files or folders here to send them to your phone";
+        }
+        else
+        {
+            DropZoneText.Text = "Connect your phone to send files";
+        }
+        App.SetTrayToolTip(sessions.Count switch
+        {
+            0 => "Bridge — no phone connected",
+            1 => $"Bridge — {sessions[0].Device.DeviceName}",
+            _ => $"Bridge — {sessions.Count} phones connected",
+        });
+        RenderRecent();
+    }
+
+    private void OnPhoneSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_fillingPhoneSelector || PhoneSelector.SelectedItem is not ComboBoxItem { Tag: string deviceId }) return;
+        _host.ActiveDeviceId = deviceId; // raises ActiveSessionChanged → RefreshPhones
+    }
+
+    private void OnPairAnotherClicked(object sender, RoutedEventArgs e)
+    {
+        _pairingAnother = true;
+        RefreshPhones(); // switching to the pairing view shows a fresh code
+    }
+
+    private void OnPairingBackClicked(object sender, RoutedEventArgs e)
+    {
+        _pairingAnother = false;
+        RefreshPhones();
     }
 
     private void OnDeviceStatusChanged(ConnectedDevice device)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            BatteryText.Text = device.BatteryPercent >= 0
-                ? $"Battery {device.BatteryPercent}%{(device.Charging ? " (charging)" : "")}"
-                : "Battery unknown";
+            if (_session?.Device.DeviceId == device.DeviceId) ShowBattery(device);
         });
+    }
+
+    private void ShowBattery(ConnectedDevice device) =>
+        BatteryText.Text = device.BatteryPercent >= 0
+            ? $"Battery {device.BatteryPercent}%{(device.Charging ? " (charging)" : "")}"
+            : "Battery unknown";
+
+    /// <summary>Settings › Paired phones: every paired phone, whether it's connected, and Forget.</summary>
+    private async Task RenderPairedPhonesAsync()
+    {
+        IReadOnlyList<PairedDevice> paired;
+        try { paired = await _store.ListAsync(); }
+        catch (Exception) { return; }
+        PairedPhonesPanel.Children.Clear();
+        if (paired.Count == 0)
+        {
+            PairedPhonesPanel.Children.Add(new TextBlock { Text = "No phones paired yet.", Opacity = 0.6 });
+            return;
+        }
+        foreach (var device in paired.OrderBy(d => d.DeviceName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var text = new StackPanel();
+            text.Children.Add(new TextBlock { Text = device.DeviceName, TextTrimming = TextTrimming.CharacterEllipsis });
+            var connected = _host.SessionFor(device.DeviceId) is { IsRunning: true };
+            text.Children.Add(new TextBlock { Text = connected ? "Connected" : "Not connected", FontSize = 12, Opacity = 0.65 });
+            row.Children.Add(text);
+            var forget = new Button { Content = "Forget" };
+            var id = device.DeviceId;
+            var name = device.DeviceName;
+            forget.Click += async (_, _) =>
+            {
+                forget.IsEnabled = false;
+                try
+                {
+                    await _host.RevokeAsync(id);
+                    SettingsMessageText.Text = "";
+                    StatusText.Text = $"Forgot {name}";
+                }
+                catch (Exception) { SettingsMessageText.Text = $"Couldn't forget {name}. Please try again."; }
+                await RenderPairedPhonesAsync();
+                RefreshPhones();
+            };
+            Grid.SetColumn(forget, 1);
+            row.Children.Add(forget);
+            PairedPhonesPanel.Children.Add(row);
+        }
     }
 
     private void OnTransferProgress(TransferProgress progress)
@@ -341,18 +463,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static string NotificationTag(string key) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..32]; // tags are limited to 64 chars
+    /// <summary>Per phone: two phones can have a notification with the same key. Tags are limited to 64 chars.</summary>
+    private static string NotificationTag(string deviceId, string key) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(deviceId + "\n" + key)))[..32];
 
-    private void ShowPhoneNotification(NotificationPostPayload note)
+    private static string AppNameKey(string? deviceId, string key) => $"{deviceId}\n{key}";
+
+    private void ShowPhoneNotification(ConnectedDevice phone, NotificationPostPayload note)
     {
         if (!_settings.Current.ShowPhoneNotifications) return;
         try
         {
+            var dev = phone.DeviceId;
+            // With several phones, say which one it's from.
+            var attribution = _host.Sessions.Count > 1 ? $"{note.AppName} · {phone.DeviceName}" : note.AppName;
             var builder = new AppNotificationBuilder()
                 .AddArgument("bridge", NotificationToastCommand.Open)
                 .AddText(note.Title)
-                .SetAttributionText(note.AppName);
+                .SetAttributionText(attribution);
             if (note.Text.Length > 0) builder.AddText(note.Text);
             // Windows allows 5 buttons. One reply box (Windows supports a single
             // inline text box well), the phone's own buttons, then Dismiss.
@@ -367,27 +495,27 @@ public sealed partial class MainWindow : Window
                     replied = true;
                     builder.AddTextBox(NotificationToastCommand.ReplyInputId, "Reply", "");
                     builder.AddButton(Button(action.Title.Length > 0 ? action.Title : "Send",
-                        new NotificationToastCommand(NotificationToastCommand.Reply, note.Key, action.Id)).SetInputId(NotificationToastCommand.ReplyInputId));
+                        new NotificationToastCommand(NotificationToastCommand.Reply, note.Key, action.Id, DeviceId: dev)).SetInputId(NotificationToastCommand.ReplyInputId));
                 }
                 else
                 {
-                    builder.AddButton(Button(action.Title, new NotificationToastCommand(NotificationToastCommand.Press, note.Key, action.Id)));
+                    builder.AddButton(Button(action.Title, new NotificationToastCommand(NotificationToastCommand.Press, note.Key, action.Id, DeviceId: dev)));
                 }
                 buttons++;
             }
             if (note.CanDismiss == true)
-                builder.AddButton(Button("Dismiss", new NotificationToastCommand(NotificationToastCommand.Dismiss, note.Key)));
+                builder.AddButton(Button("Dismiss", new NotificationToastCommand(NotificationToastCommand.Dismiss, note.Key, DeviceId: dev)));
             if (note.AppId is not null)
                 builder.AddButton(Button($"Stop {note.AppName} notifications",
-                    new NotificationToastCommand(NotificationToastCommand.Mute, AppId: note.AppId)).SetContextMenuPlacement());
+                    new NotificationToastCommand(NotificationToastCommand.Mute, AppId: note.AppId, DeviceId: dev)).SetContextMenuPlacement());
 
             var notification = builder.BuildNotification();
-            notification.Tag = NotificationTag(note.Key);
+            notification.Tag = NotificationTag(dev, note.Key);
             notification.Group = NotificationGroup;
             // The app's own update after a reply from here ("You: …"): update it quietly, don't pop up again.
-            notification.SuppressDisplay = _notificationActions.TakeRecentAction(note.Key);
+            notification.SuppressDisplay = _notificationActions.TakeRecentAction(note.Key, dev);
             AppNotificationManager.Default.Show(notification);
-            lock (AppNames) { AppNames[note.Key] = note.AppName; if (AppNames.Count > 500) AppNames.Clear(); }
+            lock (AppNames) { AppNames[AppNameKey(dev, note.Key)] = note.AppName; if (AppNames.Count > 500) AppNames.Clear(); }
         }
         catch (Exception)
         {
@@ -436,7 +564,12 @@ public sealed partial class MainWindow : Window
         try { status = await command.RunAsync(_notificationActions, userInput, _cts.Token); }
         catch (OperationCanceledException) { return; }
         string appName = "the app";
-        if (command.Key is not null) lock (AppNames) { if (AppNames.TryGetValue(command.Key, out var n)) appName = n; }
+        if (command.Key is not null)
+            lock (AppNames)
+            {
+                var dev = command.DeviceId ?? _host.CurrentSession?.Device.DeviceId;
+                if (AppNames.TryGetValue(AppNameKey(dev, command.Key), out var n)) appName = n;
+            }
         if (command.FailureMessage(status, appName) is { } message) ShowInfo(message);
     }
 
@@ -562,9 +695,9 @@ public sealed partial class MainWindow : Window
         catch (Exception) { }
     }
 
-    private static async void RemovePhoneNotification(string key)
+    private static async void RemovePhoneNotification(string deviceId, string key)
     {
-        try { await AppNotificationManager.Default.RemoveByTagAndGroupAsync(NotificationTag(key), NotificationGroup); }
+        try { await AppNotificationManager.Default.RemoveByTagAndGroupAsync(NotificationTag(deviceId, key), NotificationGroup); }
         catch (Exception) { }
     }
 
@@ -625,6 +758,7 @@ public sealed partial class MainWindow : Window
         var actual = await StartupRegistration.IsEnabledAsync();
         if (actual is { } on && on != _settings.Current.StartWithWindows) _settings.Update(s => s with { StartWithWindows = on });
         ApplySettingsToUi();
+        _ = RenderPairedPhonesAsync();
         SettingsPanel.Visibility = Visibility.Visible;
         MainPanel.Visibility = Visibility.Collapsed;
         PhotosPanel.Visibility = Visibility.Collapsed;
@@ -737,6 +871,7 @@ public sealed partial class MainWindow : Window
                 LogField.Code("arch", System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString()),
                 LogField.Flag("packaged", StartupRegistration.IsPackaged),
                 LogField.Flag("connected", _session is not null),
+                LogField.Num("phones_connected", _host.Sessions.Count),
                 LogField.Flag("custom_download_folder", s.DownloadFolder is not null),
                 LogField.Flag("start_with_windows", s.StartWithWindows),
                 LogField.Flag("show_notifications", s.ShowPhoneNotifications),

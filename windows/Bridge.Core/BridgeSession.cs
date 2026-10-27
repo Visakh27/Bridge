@@ -71,8 +71,7 @@ public sealed class BridgeSession : IAsyncDisposable
     {
         Device.IsConnected = true;
         Device.LastSeen = DateTimeOffset.UtcNow;
-        _clipboard.PeerSupportsClipboard = Device.PeerFeatures.Contains(Features.Clipboard);
-        _clipboard.Channel = _channel;
+        _clipboard.AddPeer(_channel, Device.PeerFeatures.Contains(Features.Clipboard));
         _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
         _presenceLoop = Task.Run(() => PresenceLoopAsync(_cts.Token));
         StatusChanged?.Invoke(Device);
@@ -233,7 +232,7 @@ public sealed class BridgeSession : IAsyncDisposable
                 break;
             case MessageType.CapabilitiesAdvertise:
                 Device.PeerFeatures = message.PayloadAs<CapabilitiesPayload>().Features ?? [];
-                _clipboard.PeerSupportsClipboard = Device.PeerFeatures.Contains(Features.Clipboard);
+                _clipboard.SetPeerSupport(_channel, Device.PeerFeatures.Contains(Features.Clipboard));
                 StatusChanged?.Invoke(Device);
                 break;
             case MessageType.PresencePing:
@@ -276,7 +275,7 @@ public sealed class BridgeSession : IAsyncDisposable
         if (Interlocked.Exchange(ref _ended, 1) != 0) return;
         _cts.Cancel();
         Device.IsConnected = false;
-        if (ReferenceEquals(_clipboard.Channel, _channel)) _clipboard.Channel = null;
+        _clipboard.RemovePeer(_channel);
         foreach (var waiting in _pendingActions.Values) waiting.TrySetResult(NotificationActionStatus.Unavailable);
         _fileTransfer.AbortAll(_channel);
         await _channel.DisposeAsync();
