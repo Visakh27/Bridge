@@ -371,6 +371,19 @@ public sealed class RemoteTests : IDisposable
     }
 
     [Fact]
+    public async Task With_No_Phone_Paired_Remote_Access_Says_So()
+    {
+        var (relay, link, _) = StartRelay();
+        var pc = StartPc();
+        await pc.Remote.ConfigureAsync(link);
+        await WaitFor(() => pc.Remote.Status == new RemoteStatus(RemoteState.Ready, RemoteStatus.NoPhones));
+        Assert.Contains("Pair a phone", pc.Remote.Status.Describe(link.Display));
+        Assert.Equal(0, relay.WaitingPcs);
+        await PairPhone(pc); // picked up without restarting anything
+        await WaitFor(() => pc.Remote.Status == new RemoteStatus(RemoteState.Ready) && relay.WaitingPcs == 1);
+    }
+
+    [Fact]
     public async Task Turning_Remote_Access_Off_Tells_The_Phone_And_Drops_Relay_Sessions()
     {
         var (relay, link, _) = StartRelay();

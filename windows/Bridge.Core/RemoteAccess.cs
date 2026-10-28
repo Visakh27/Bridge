@@ -21,10 +21,14 @@ public enum RemoteState
 /// <summary>Remote access as the Settings panel shows it. <see cref="Code"/>: the relay's reason when refused.</summary>
 public sealed record RemoteStatus(RemoteState State, string? Code = null)
 {
+    /// <summary><see cref="Code"/> when remote access is on but no phone is paired yet.</summary>
+    public const string NoPhones = "no_phones";
+
     public string Describe(string? relay) => State switch
     {
         RemoteState.Off => "Off. Your phone connects only on the same network as this PC.",
         RemoteState.Connecting => $"Connecting to {relay}…",
+        RemoteState.Ready when Code == NoPhones => $"On ({relay}). Pair a phone here first; it can then reach this PC when it's away.",
         RemoteState.Ready => $"On. Your phones can reach this PC through {relay} when they're away.",
         RemoteState.Unreachable => $"Can't reach {relay}. Bridge keeps trying; local connections still work.",
         RemoteState.Refused when Code == RelayError.Unauthorized => $"{relay} didn't accept the key. Check the relay link.",
@@ -61,6 +65,7 @@ public sealed class RemoteAccess : IAsyncDisposable
     private RelayLink? _link;
     private RemoteStatus _status = new(RemoteState.Off);
     private string? _lastRefusal;
+    private bool _noPhones;
     private Task? _supervisor;
 
     public RemoteAccess(BridgeHost host, IPairedDeviceStore store, DeviceIdentity identity,
@@ -104,6 +109,7 @@ public sealed class RemoteAccess : IAsyncDisposable
             _loops.Clear();
             _loopState.Clear();
             _lastRefusal = null;
+            _noPhones = false;
         }
         old?.Cancel();
         if (oldSupervisor is not null) { try { await oldSupervisor; } catch (OperationCanceledException) { } }
@@ -140,6 +146,7 @@ public sealed class RemoteAccess : IAsyncDisposable
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { paired = []; }
                 lock (_gate)
                 {
+                    _noPhones = paired.Count == 0;
                     foreach (var device in paired)
                         if (!_loops.TryGetValue(device.DeviceId, out var running) || running.IsCompleted)
                         {
@@ -217,6 +224,7 @@ public sealed class RemoteAccess : IAsyncDisposable
         {
             var states = _loopState.Values.ToList();
             next = _link is null ? new RemoteStatus(RemoteState.Off)
+                : _noPhones ? new RemoteStatus(RemoteState.Ready, RemoteStatus.NoPhones)
                 : states.Contains(RemoteState.Ready) ? new RemoteStatus(RemoteState.Ready)
                 : states.Contains(RemoteState.Refused) ? new RemoteStatus(RemoteState.Refused, _lastRefusal)
                 : states.Contains(RemoteState.Unreachable) ? new RemoteStatus(RemoteState.Unreachable)
