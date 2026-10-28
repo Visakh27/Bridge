@@ -37,6 +37,8 @@ public static class MessageType
     public const string PhotosChanged = "photos.changed";
     public const string HandoffOpen = "handoff.open";
     public const string HandoffAck = "handoff.ack";
+    /// <summary>PC → phone: the relay to use when the two aren't on the same network (or that there is none).</summary>
+    public const string RelayConfig = "relay.config";
     public const string Error = "error";
 }
 
@@ -50,6 +52,8 @@ public static class Features
     public const string Photos = "photos";
     /// <summary>Links and text handed from one device to the other (handoff.*).</summary>
     public const string Handoff = "handoff";
+    /// <summary>Phone: it can connect through a relay (and accepts relay.config).</summary>
+    public const string Remote = "remote";
     /// <summary>Interrupted transfers continue where they stopped (file.resume).</summary>
     public const string FilesResume = "files.resume";
     /// <summary>Folder transfers (file.start relativePath / batch fields).</summary>

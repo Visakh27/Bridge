@@ -49,6 +49,8 @@ class BridgeClientSession(
     private val photos: PhotoRequestHandler? = null,
     /** Links and text from the PC, and answers to ours; null = not offered. */
     private val handoff: HandoffHandler? = null,
+    /** Stores the relay the PC tells us about (relay.config); null = remote access not offered. */
+    private val relay: RelayConfigHandler? = null,
 ) : SessionHandle {
     interface Listener {
         fun onConnected(peerFeatures: List<String>) {}
@@ -64,7 +66,7 @@ class BridgeClientSession(
     /** What this phone advertises: notification actions only when something can carry them out. */
     val localFeatures: List<String> = LOCAL_FEATURES +
         listOfNotNull(Features.NOTIFICATIONS_ACTIONS.takeIf { notifications != null }, Features.PHOTOS.takeIf { photos != null },
-            Features.HANDOFF.takeIf { handoff != null })
+            Features.HANDOFF.takeIf { handoff != null }, Features.REMOTE.takeIf { relay != null })
 
     @Volatile private var channel: EncryptedChannel? = null
     @Volatile private var lastSeen = System.currentTimeMillis()
@@ -179,6 +181,7 @@ class BridgeClientSession(
             MessageType.NOTIFICATION_ACTION, MessageType.NOTIFICATION_DISMISS, MessageType.NOTIFICATION_MUTE ->
                 notifications?.handleIncoming(message) { ch.send(it) }
             MessageType.HANDOFF_OPEN, MessageType.HANDOFF_ACK -> handoff?.handleIncoming(message) { ch.send(it) }
+            MessageType.RELAY_CONFIG -> relay?.handle(pc.deviceId, message)
             MessageType.PHOTOS_LIST, MessageType.PHOTOS_THUMB, MessageType.PHOTOS_FETCH ->
                 photos?.handleIncoming(message, { ch.send(it) }) { file, name, transferId ->
                     // Resumable like any send; the private copy is deleted once it's done.

@@ -30,5 +30,7 @@ object MessageType {
     const val PHOTOS_CHANGED = "photos.changed"
     const val HANDOFF_OPEN = "handoff.open"
     const val HANDOFF_ACK = "handoff.ack"
+    /** PC → phone: the relay to use when away from the PC's network (or that there's none). */
+    const val RELAY_CONFIG = "relay.config"
     const val ERROR = "error"
 }

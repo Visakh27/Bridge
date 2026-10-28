@@ -176,6 +176,30 @@ and status-bar). `--check` verifies the committed assets.
   to one phone, one phone leaving), then one phone with two Windows hosts
   (choosing, switching, falling back when one goes away, being forgotten by
   one), with all four logs checked.
+- Remote access: `RemoteTests` (xUnit) and `RemoteTest` (JUnit) cover relay
+  links (valid forms, round trip, never showing the key, broken ones), rooms
+  and proofs against shared vectors (also checked with an independent Python
+  implementation), hello shape/key/clock checks, and the relay itself: pairing
+  a waiting PC with its phone (300 KB both ways), pc_offline, bad hellos, wrong
+  keys, stale and replayed proofs, over-long lines, silent clients, the newest
+  PC connection taking the room, pings, per-address limits, idle pipes and a
+  relay that stops answering. On the PC: a phone reaching it through the relay
+  (route recorded), relay.config only to phones that advertise `remote`,
+  turning remote access off (phones told, relay sessions dropped), pairing
+  through the relay refused, a stranger with the relay key and room refused at
+  the handshake, a wrong key and a dead relay reported and retried, one room
+  per phone (a forgotten phone stops waiting), and no relay address, key or
+  room in any log. On the phone: relay.config checks and storage, joining with
+  a proof (the key never sent), refusal codes, trying the relay only when the
+  PC can't be reached directly, and a PC forgetting the phone through the
+  relay. Cross-platform (`e2e-remote`): a real relay behind a recording proxy,
+  a Windows host with remote access on and an Android phone that pairs at
+  home, leaves (files both ways byte for byte and clipboard through the relay),
+  survives a relay restart, sees remote access turned off, and comes home
+  (direct again, relay forgotten); the proxy's capture is checked for any
+  contents, names, file bytes or the key, and all logs for leaks.
+  `relay-schemas` checks relay.config from both apps and the phone's join line
+  against the relay's own checks.
 - Polish: `PolishTests` (xUnit) and `PolishTest` (JUnit) cover the
   diagnostics log (only safe field shapes, rotation and caps, retention,
   disabled/cleared, concurrent writers, unwritable folders), a real session
@@ -196,7 +220,11 @@ and status-bar). `--check` verifies the committed assets.
   exchange real posts, replies, button presses, dismissals and mutes,
   including a click made while the phone was disconnected and a phone app
   restart; messages from both platforms are checked against the schemas.
-- Manual/integration still needed on real devices: two phones on one PC
+- Manual/integration still needed on real devices: remote access through a
+  relay on a real server (Docker image, firewall, the link printed at start),
+  Settings › Remote access (paste, Use this relay, Remove, status text), a
+  phone on mobile data reaching the PC and switching back to Wi-Fi at home,
+  and a relay behind carrier NAT/IPv6; two phones on one PC
   (the Send to picker, toasts showing which phone, replying to each, Forget
   in Settings › Paired phones, "Pair another phone", the tray tooltip), one
   phone with home and work PCs (Settings › Your PCs: Use this PC, Forget,

@@ -98,6 +98,8 @@ private fun StatusCard(state: BridgeConnectionService.State) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
+            if (state.status == BridgeConnectionService.Status.CONNECTED && state.viaRelay)
+                Text("Away from $pc's network: connected through your relay, still end-to-end encrypted.", style = MaterialTheme.typography.bodySmall)
             if (state.status != BridgeConnectionService.Status.CONNECTED) {
                 state.lastError?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 val wait = state.nextRetryAt?.let { ((it - now) / 1000).coerceAtLeast(0) }

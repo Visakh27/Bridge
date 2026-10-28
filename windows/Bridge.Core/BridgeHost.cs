@@ -147,7 +147,7 @@ public sealed class BridgeHost : IAsyncDisposable
     }
 
     /// <summary>Handles one accepted connection. Never throws.</summary>
-    public async Task HandleConnectionAsync(ITransport transport, CancellationToken ct)
+    public async Task HandleConnectionAsync(ITransport transport, CancellationToken ct, string route = ConnectionRoute.Lan)
     {
         EncryptedChannel? channel = null;
         var handedOff = false;
@@ -168,6 +168,11 @@ public sealed class BridgeHost : IAsyncDisposable
 
             switch (first.Type)
             {
+                case MessageType.PairingRequest when route == ConnectionRoute.Relay:
+                    // Pairing happens only face to face, on the local network.
+                    await SendErrorAsync(channel, ErrorCodes.PermissionDenied, "Pair on the same network as the PC", ct);
+                    ConnectionRejected?.Invoke("Pairing over the relay refused");
+                    break;
                 case MessageType.PairingRequest:
                 {
                     var device = await _pairing.HandlePairingRequestAsync(channel, first, ct);
@@ -176,7 +181,7 @@ public sealed class BridgeHost : IAsyncDisposable
                     break; // pairing connections end here; the phone reconnects for the session
                 }
                 case MessageType.CapabilitiesAdvertise:
-                    handedOff = await StartSessionAsync(channel, first, ct);
+                    handedOff = await StartSessionAsync(channel, first, ct, route);
                     break;
                 default:
                     await SendErrorAsync(channel, ErrorCodes.AuthFailed, "Expected pairing.request or capabilities.advertise", ct);
@@ -198,7 +203,7 @@ public sealed class BridgeHost : IAsyncDisposable
         }
     }
 
-    private async Task<bool> StartSessionAsync(EncryptedChannel channel, BridgeMessage capabilities, CancellationToken ct)
+    private async Task<bool> StartSessionAsync(EncryptedChannel channel, BridgeMessage capabilities, CancellationToken ct, string route)
     {
         var paired = (await _store.ListAsync()).FirstOrDefault(d => d.DeviceId == channel.PeerDeviceId);
         if (paired is null)
@@ -219,6 +224,7 @@ public sealed class BridgeHost : IAsyncDisposable
         {
             DeviceId = paired.DeviceId,
             DeviceName = paired.DeviceName,
+            Route = route,
             PeerFeatures = capabilities.PayloadAs<CapabilitiesPayload>().Features ?? [],
         };
         await _sessionLock.WaitAsync(ct);

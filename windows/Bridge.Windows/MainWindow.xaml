@@ -139,6 +139,18 @@
                 <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
                            Text="Up to 8 phones can be connected at once. Files, links and photos go to the phone chosen under Send to; your PC's clipboard goes to every connected phone with clipboard sync, but one phone's clipboard is never passed on to another." />
 
+                <TextBlock Text="Remote access" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <ToggleSwitch x:Name="RemoteToggle" Header="Let my phones reach this PC when they're away, through my relay" Toggled="OnRemoteToggled" />
+                <TextBox x:Name="RelayLinkBox" Header="Relay link" PlaceholderText="bridge-relay://relay.example.com:47830#…"
+                         IsSpellCheckEnabled="False" TextWrapping="NoWrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="SaveRelayButton" Content="Use this relay" Click="OnSaveRelayClicked" />
+                    <Button x:Name="ForgetRelayButton" Content="Remove" Click="OnForgetRelayClicked" />
+                </StackPanel>
+                <TextBlock x:Name="RemoteStatusText" TextWrapping="Wrap" Opacity="0.8" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.6"
+                           Text="Run your own relay on any server (see docs/remote.md), then paste the link it prints. Everything stays end-to-end encrypted: the relay passes bytes along but can't read them. Each phone learns the relay the next time it connects here on the same network." />
+
                 <TextBlock Text="Received files" FontWeight="SemiBold" Margin="0,8,0,0" />
                 <TextBlock x:Name="DownloadFolderText" TextWrapping="Wrap" Opacity="0.8" />
                 <StackPanel Orientation="Horizontal" Spacing="8">

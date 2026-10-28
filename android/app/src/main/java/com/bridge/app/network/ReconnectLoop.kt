@@ -21,6 +21,8 @@ interface SessionHandle {
  *  - for each: connects to the stored address; if that fails, runs local
  *    discovery, and if the PC answers from a new address/port, saves it and
  *    connects there straight away (once per failure);
+ *  - if the PC still can't be reached directly and it has a relay (remote access),
+ *    tries the relay before moving on;
  *  - when every PC has failed, backs off (1 s … 30 s), but a network change
  *    ([wake]) retries now; when a session ends it starts over from the first PC;
  *  - a PC that says this phone is no longer paired is forgotten; the loop stops
@@ -37,6 +39,8 @@ class ReconnectLoop(
     /** A session that lasted this long was real, so the next failure starts the backoff over. */
     private val stableSessionMs: Long = 30_000,
     private val chooser: PcChooser? = null,
+    /** A session to [PairedDevice] through its relay, or null if it has none. */
+    private val relaySessionFactory: ((PairedDevice) -> SessionHandle?)? = null,
 ) {
     interface Listener {
         fun onConnecting(pc: PairedDevice) {}
@@ -47,6 +51,8 @@ class ReconnectLoop(
         fun onAttemptFailed(pc: PairedDevice, error: Exception) {}
         /** The next attempt is in [delayMs] unless [wake] is called first ("Try now"). */
         fun onRetryScheduled(delayMs: Long) {}
+        /** [pc] isn't reachable directly: trying its relay. */
+        fun onTryingRelay(pc: PairedDevice) {}
     }
 
     enum class Outcome { NOT_PAIRED, UNPAIRED }
@@ -98,8 +104,9 @@ class ReconnectLoop(
                     currentPc = pc
                     val startedAt = System.currentTimeMillis()
                     var retryNow = false
+                    var unreachable = false
                     try {
-                        runOnce(pc)
+                        runOnce(sessionFactory(pc))
                         sessionRan = true
                     } catch (e: CancellationException) {
                         throw e
@@ -109,6 +116,7 @@ class ReconnectLoop(
                         unpairedAny = true
                         listener.onUnpaired(pc, store.list().size)
                     } catch (e: Exception) {
+                        unreachable = e is IOException || e is AuthenticationException
                         listener.onAttemptFailed(pc, e)
                         // Unreachable / timed out (IOException) or someone else answered at that
                         // address (AuthenticationException): the PC may have moved. Look for it,
@@ -127,6 +135,29 @@ class ReconnectLoop(
                     } finally {
                         currentPc = null
                     }
+                    // Not reachable directly (away from home?): its relay, if it has one.
+                    if (!retryNow && unreachable && !switchRequested) {
+                        val relayed = relaySessionFactory?.invoke(pc)
+                        if (relayed != null) {
+                            listener.onTryingRelay(pc)
+                            currentPc = pc
+                            try {
+                                runOnce(relayed)
+                                sessionRan = true
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: DeviceUnpairedException) {
+                                store.revoke(pc.deviceId)
+                                chooser?.forgotten(pc.deviceId)
+                                unpairedAny = true
+                                listener.onUnpaired(pc, store.list().size)
+                            } catch (e: Exception) {
+                                listener.onAttemptFailed(pc, e)
+                            } finally {
+                                currentPc = null
+                            }
+                        }
+                    }
                     if (System.currentTimeMillis() - startedAt >= stableSessionMs) attempt = 0
                     if (!retryNow) break
                 }
@@ -142,8 +173,7 @@ class ReconnectLoop(
         throw CancellationException()
     }
 
-    private suspend fun runOnce(pc: PairedDevice) {
-        val session = sessionFactory(pc)
+    private suspend fun runOnce(session: SessionHandle) {
         current = session
         try {
             session.run()

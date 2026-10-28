@@ -44,6 +44,8 @@ public sealed partial class MainWindow : Window
     private readonly PhotoBrowser _photos;
     private readonly ExplorerSendQueue _explorerSend;
     private readonly HandoffService _handoff;
+    private readonly RemoteAccess _remote;
+    private readonly RelayLinkStore _relayLinks;
     private readonly WindowsClipboardAccess _clipboardAccess;
     private const string HandoffToastGroup = "bridge-handoff";
     private const string SendToastTag = "explorer-send";
@@ -118,7 +120,12 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception) { ShowHandoffToast($"Text from {phone}", "Couldn't put it on the clipboard (another app is using it). Try again from your phone."); }
         });
-        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos, _handoff);
+        // Remote access (opt-in): the relay link is kept encrypted for this Windows user.
+        _relayLinks = new RelayLinkStore(Path.Combine(dataDir, "relay.bin"));
+        _remote = new RemoteAccess(_host, store, identity);
+        _remote.StatusChanged += _ => DispatcherQueue.TryEnqueue(ShowRemoteStatus);
+        _ = new BridgeDiagnostics(_diagnostics, _host, _fileTransfer, _notificationActions, _photos, _handoff, _remote);
+        if (_settings.Current.RemoteAccess && _relayLinks.Load() is { } savedRelay) _ = _remote.ConfigureAsync(savedRelay);
         _diagnostics.Info("app.started", LogField.Version("version", typeof(MainWindow).Assembly.GetName().Version),
             LogField.Version("os", Environment.OSVersion.Version), LogField.Flag("packaged", StartupRegistration.IsPackaged));
 
@@ -265,7 +272,7 @@ public sealed partial class MainWindow : Window
         PairingTitleText.Text = active is not null ? "Scan with the Bridge app on the other phone" : "Scan with the Bridge Android app";
         if (active is not null)
         {
-            DeviceNameText.Text = active.Device.DeviceName;
+            DeviceNameText.Text = active.Device.Route == ConnectionRoute.Relay ? $"{active.Device.DeviceName} (away, through your relay)" : active.Device.DeviceName;
             ShowBattery(active.Device);
             StatusText.Text = sessions.Count switch
             {
@@ -573,6 +580,50 @@ public sealed partial class MainWindow : Window
         if (command.FailureMessage(status, appName) is { } message) ShowInfo(message);
     }
 
+    // ------------------------------------------------------------------ remote access
+
+    private void ShowRemoteStatus()
+    {
+        var link = _remote.Link ?? _relayLinks.Load();
+        RemoteStatusText.Text = link is null && _settings.Current.RemoteAccess
+            ? "Paste your relay's link and select Use this relay."
+            : _remote.Status.Describe(link?.Display);
+    }
+
+    private async void OnRemoteToggled(object sender, RoutedEventArgs e)
+    {
+        if (_applyingSettings) return;
+        var on = RemoteToggle.IsOn;
+        _settings.Update(s => s with { RemoteAccess = on });
+        await _remote.ConfigureAsync(on ? _relayLinks.Load() : null);
+        ShowRemoteStatus();
+    }
+
+    private async void OnSaveRelayClicked(object sender, RoutedEventArgs e)
+    {
+        var link = RelayLink.Parse(RelayLinkBox.Text);
+        if (link is null)
+        {
+            RemoteStatusText.Text = "That isn't a relay link. It looks like bridge-relay://host:port#key — copy it exactly as your relay printed it.";
+            return;
+        }
+        if (!_relayLinks.Save(link)) { RemoteStatusText.Text = "Couldn't save the relay link. Please try again."; return; }
+        _settings.Update(s => s with { RemoteAccess = true });
+        ApplySettingsToUi();
+        await _remote.ConfigureAsync(link);
+        ShowRemoteStatus();
+    }
+
+    private async void OnForgetRelayClicked(object sender, RoutedEventArgs e)
+    {
+        _relayLinks.Save(null);
+        _settings.Update(s => s with { RemoteAccess = false });
+        RelayLinkBox.Text = "";
+        ApplySettingsToUi();
+        await _remote.ConfigureAsync(null); // phones are told there's no relay any more
+        ShowRemoteStatus();
+    }
+
     // ------------------------------------------------------------------ handoff (links and text)
 
     /// <summary>Opens a checked http(s) link in the default browser; never anything else.</summary>
@@ -739,6 +790,11 @@ public sealed partial class MainWindow : Window
             QuickAccessToggle.IsOn = s.QuickAccessPin;
             SendToToggle.IsOn = s.SendToMenu;
             ReceiveHandoffToggle.IsOn = s.ReceiveHandoff;
+            RemoteToggle.IsOn = s.RemoteAccess;
+            var relay = _relayLinks.Load();
+            if (RelayLinkBox.FocusState == FocusState.Unfocused) RelayLinkBox.Text = relay?.ToString() ?? "";
+            ForgetRelayButton.IsEnabled = relay is not null;
+            ShowRemoteStatus();
             OpenLinksToggle.IsOn = s.OpenLinksAutomatically;
             OpenLinksToggle.IsEnabled = s.ReceiveHandoff;
             SendToToggle.Visibility = StartupRegistration.IsPackaged ? Visibility.Collapsed : Visibility.Visible;
@@ -872,6 +928,8 @@ public sealed partial class MainWindow : Window
                 LogField.Flag("packaged", StartupRegistration.IsPackaged),
                 LogField.Flag("connected", _session is not null),
                 LogField.Num("phones_connected", _host.Sessions.Count),
+                LogField.Flag("remote_access", s.RemoteAccess),
+                LogField.Code("remote_state", _remote.Status.State.ToString()),
                 LogField.Flag("custom_download_folder", s.DownloadFolder is not null),
                 LogField.Flag("start_with_windows", s.StartWithWindows),
                 LogField.Flag("show_notifications", s.ShowPhoneNotifications),
@@ -1113,6 +1171,7 @@ public sealed partial class MainWindow : Window
         _discovery?.Dispose();
         _fileTransfer.State.Dispose(); // write any pending resume state before exiting
         _diagnostics.Info("app.exit");
+        await _remote.DisposeAsync();
         await _host.DisposeAsync();
         _listener.Dispose();
     }

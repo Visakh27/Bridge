@@ -139,7 +139,7 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 |---|---|---|
 | `pairing.request` | A→W | `{"pairingToken","deviceName","publicKeyBase64"}` (phone identity key) |
 | `pairing.accept` / `pairing.reject` | W→A | `{"deviceName","publicKeyBase64"}` / `{"reason"}` |
-| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions","photos","handoff"]}` |
+| `capabilities.advertise` | both | `{"features": ["files","clipboard","notifications","files.resume","files.folders","notifications.actions","photos","handoff","remote"]}` |
 | `presence.ping` / `presence.pong` | both | `{}` — keep-alive; each side pings every 15 s and drops the connection after 45 s of silence |
 | `device.status` | A→W | `{"batteryPercent","charging","connectionQuality"}` |
 | `clipboard.update` | both | `{"format":"text","data":"..."}` (≤ 10,000 chars) |
@@ -160,6 +160,7 @@ JSON (camelCase): `{"pairingToken","host","port","deviceId","deviceName","public
 | `photos.changed` | A→W | `{}` — the phone's photos changed; refresh |
 | `handoff.open` | both | `{"id","kind":"url"|"text","url"?,"title"?,"text"?}` (see Handoff) |
 | `handoff.ack` | both | `{"id","status"}` — `shown`, `opened`, `copied`, `disabled`, `invalid`, `busy` |
+| `relay.config` | W→A | `{"enabled":true,"host","port","key"}` or `{"enabled":false}` (see Remote access) |
 | `error` | both | `{"code","message"}` — see docs/architecture.md error codes |
 
 ## Versioning
@@ -321,4 +322,41 @@ Either side advertises `handoff` when it accepts links and text; a side sends
 - The sender waits up to 10 s for the answer; a status it doesn't know counts
   as `invalid`. Handoffs are not queued while disconnected.
 - Diagnostics record only direction, kind and status — never the link or text.
+
+## Remote access (`remote`, relay)
+
+The phone advertises `remote` when it can connect through a relay. A PC with
+remote access on sends such a phone `relay.config` over their authenticated
+session (on connect and whenever it changes): the relay's `host`, `port` and
+`key` (32 bytes, base64url), or `{"enabled":false}`. Schema:
+`relay_config.schema.json`. The phone validates it, keeps it for that PC only,
+and ignores a malformed update.
+
+**Relay join protocol** (plain TCP to the relay, before any Bridge framing).
+The client sends one UTF-8 JSON line (≤ 1024 bytes, `\n`-terminated):
+
+```
+{"v":1,"role":"pc"|"phone","room":"<64 hex>","ts":<unix seconds>,"nonce":"<32 hex>","proof":"<64 hex>"}
+```
+
+- `room` = lowercase hex SHA-256 of `"bridge-relay-room-v1" 0x00 <PC public key> 0x00 <phone public key>`,
+  using the long-term public keys exactly as exchanged at pairing.
+- `proof` = lowercase hex HMAC-SHA256(relay key, `"bridge-relay-v1\n" role "\n" room "\n" ts "\n" nonce`).
+  The relay accepts a proof once (by nonce) and only within 2 minutes of `ts`.
+
+The relay replies with JSON lines: `{"t":"waiting"}` (to a PC), `{"t":"ping"}`
+(every 25 s to a waiting PC), `{"t":"paired"}`, or
+`{"t":"error","code":"bad_hello|unauthorized|pc_offline|busy|replaced"}`
+followed by a close. After `paired` the connection is a plain byte pipe to the
+other side, and the normal session starts on it: framing, the handshake with
+the phone as initiator, then `capabilities.advertise`. The relay never sees
+keys or plaintext. A PC keeps one waiting connection per paired phone, and a
+newer one from the same room replaces the older (`replaced`). A phone with no
+PC waiting gets `pc_offline`. A PC refuses `pairing.request` on a connection
+that came through the relay (`error` `PERMISSION_DENIED`): pairing is
+local-only.
+
+A phone tries the relay for a PC only when that PC wasn't reachable directly
+(at its stored address, then via discovery). A PC that answered but refused
+(for example `TOO_MANY_DEVICES`) isn't retried through the relay.
 
