@@ -367,7 +367,8 @@ public sealed class RemoteTests : IDisposable
         Assert.Equal(RelayLink.EncodeKey(Key), config.Key);
         await WaitFor(() => relay.WaitingPcs == 1); // already waiting for the next time
         lock (states) Assert.Equal(RemoteState.Connecting, states[0]);
-        Assert.Contains(pc.Log.Lines(), l => l.Contains("session.started") && l.Contains("route=relay"));
+        // The log's own "started" handler may run after the one that sent relay.config: give it a moment.
+        await WaitFor(() => pc.Log.Lines().Any(l => l.Contains("session.started") && l.Contains("route=relay")));
     }
 
     [Fact]
