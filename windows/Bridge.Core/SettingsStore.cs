@@ -26,6 +26,8 @@ public sealed record BridgeSettings
     public bool ReceiveHandoff { get; init; } = true;
     /// <summary>Open links from the phone in the browser right away instead of offering them in a notification.</summary>
     public bool OpenLinksAutomatically { get; init; }
+    /// <summary>Remote access through the user's relay (off until turned on; the link itself is kept apart, encrypted).</summary>
+    public bool RemoteAccess { get; init; }
     /// <summary>The first-run guide has been seen.</summary>
     public bool OnboardingDone { get; init; }
 }

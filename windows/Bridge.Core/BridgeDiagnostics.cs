@@ -15,7 +15,7 @@ public sealed class BridgeDiagnostics
     private readonly BridgeHost _host;
 
     public BridgeDiagnostics(DiagnosticsLog log, BridgeHost host, FileTransferService files, NotificationActionRouter? notificationActions = null,
-        PhotoBrowser? photos = null, HandoffService? handoff = null)
+        PhotoBrowser? photos = null, HandoffService? handoff = null, RemoteAccess? remote = null)
     {
         _log = log;
         host.DevicePaired += d => _log.Info("pair.accepted", LogField.Id("peer", d.DeviceId, _log));
@@ -35,6 +35,11 @@ public sealed class BridgeDiagnostics
                 if (kind == "thumb" && status == PhotoStatus.Ok) return;
                 _log.Info("photos.request", LogField.Code("kind", kind), LogField.Code("status", status));
             };
+        if (remote is not null)
+        {
+            remote.Completed += (ev, code) => _log.Info(ev, LogField.Code("code", code));
+            remote.StatusChanged += s => _log.Info("remote.status", LogField.Code("state", s.State.ToString()), LogField.Code("code", s.Code));
+        }
         if (handoff is not null)
             handoff.Completed += (dir, kind, status) =>
                 _log.Info("handoff", LogField.Code("dir", dir), LogField.Code("kind", kind), LogField.Code("status", status));
@@ -56,6 +61,8 @@ public sealed class BridgeDiagnostics
             "Pairing request rejected" => "pairing_rejected",
             "Unpaired device tried to connect" => "unpaired_device",
             "Identity signature check failed" => "bad_signature",
+            "Too many phones connected" => "too_many_phones",
+            "Pairing over the relay refused" => "pairing_via_relay",
             _ when reason.StartsWith("Unexpected first message", StringComparison.Ordinal) => "unexpected_first_message",
             _ => "other",
         };
@@ -66,7 +73,7 @@ public sealed class BridgeDiagnostics
     {
         var peer = session.Device.DeviceId;
         var started = DateTimeOffset.UtcNow;
-        _log.Info("session.started", LogField.Id("peer", peer, _log), LogField.Num("features", session.Device.PeerFeatures.Count),
+        _log.Info("session.started", LogField.Id("peer", peer, _log), LogField.Code("route", session.Device.Route), LogField.Num("features", session.Device.PeerFeatures.Count),
             LogField.Flag("resume", session.SendOptions.PeerSupportsResume), LogField.Flag("actions", session.SupportsNotificationActions),
             LogField.Num("phones", _host.Sessions.Count));
         session.Ended += _ => _log.Info("session.ended", LogField.Id("peer", peer, _log), LogField.Ms("duration_ms", DateTimeOffset.UtcNow - started),

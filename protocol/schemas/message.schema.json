@@ -45,6 +45,7 @@
         "photos.changed",
         "handoff.open",
         "handoff.ack",
+        "relay.config",
         "error"
       ]
     },

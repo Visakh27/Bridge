@@ -95,6 +95,10 @@ fun SettingsScreen(
                             state.pcId == pc.deviceId && state.status == BridgeConnectionService.Status.CONNECTING -> "Connecting…"
                             pinned == pc.deviceId -> "Your choice"
                             else -> "Not connected"
+                        } + when {
+                            connectedHere && state.viaRelay -> " · through your relay"
+                            BridgeConnectionService.hasRelay(context, pc.deviceId) -> " · reachable when away"
+                            else -> ""
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )

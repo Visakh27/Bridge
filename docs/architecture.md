@@ -81,6 +81,18 @@ Bridge.Security ────────┤    platform)         ├────
   (the user's choice, the last one used, then newest pairing) and
   `ReconnectLoop` tries them in turn, one connection at a time, forgetting
   only a PC that says it no longer knows the phone.
+- **Remote access** — `Bridge.Network.RelayProtocol` (relay link, rooms, join
+  proofs, the join line) is shared by the PC and the relay; Android has the same
+  in `network/Relay.kt` (checked against the same test vectors).
+  `Bridge.Relay` is a separate, self-hosted .NET service (`RelayServer`: rooms,
+  limits, the byte pipe) with a Dockerfile. On the PC, `Bridge.Core`
+  `RemoteAccess` keeps a connection waiting at the relay for each paired phone
+  and hands a joined one to `BridgeHost.HandleConnectionAsync` (route
+  `relay`) — from there it is an ordinary session; it also sends `relay.config`.
+  On the phone, `ReconnectLoop` tries a PC's relay (via a `BridgeClientSession`
+  whose connect step is `RelayClient.join`) only after the direct address and
+  discovery failed, and the service moves back to a direct connection when the
+  network changes. Bridge.Windows keeps the relay link encrypted with DPAPI.
 - **Polish (settings, diagnostics, history)** — Windows: `Bridge.Core`
   `SettingsStore` (validated, atomic JSON), `DiagnosticsLog` +
   `BridgeDiagnostics` (event wiring) + `DiagnosticsReport`, and
@@ -100,7 +112,9 @@ are never shown to the user.
 
 ## Why no cloud backend in the MVP
 
-All core features work over a direct local connection. A future optional
-backend (section 19 of the blueprint) would only add account/device
-management, push, update distribution, diagnostics and optional remote
-connectivity — never a requirement for core file/clipboard/notification sync.
+All core features work over a direct local connection. Remote connectivity
+is available without a Bridge-run backend: the user can run their own relay
+(`docs/remote.md`), which only forwards end-to-end encrypted connections. A
+future optional backend (section 19 of the blueprint) would only add
+account/device management, push, update distribution and diagnostics — never
+a requirement for core file/clipboard/notification sync.

@@ -116,6 +116,8 @@ object Features {
     const val PHOTOS = "photos"
     /** Links and text handed from one device to the other (handoff.*). */
     const val HANDOFF = "handoff"
+    /** Phone: can connect through a relay (and accepts relay.config). */
+    const val REMOTE = "remote"
     /** Interrupted transfers continue where they stopped (file.resume). */
     const val FILES_RESUME = "files.resume"
     /** Folder transfers (file.start relativePath / batch fields). */
@@ -172,6 +174,14 @@ object PhotoStatus {
 @Serializable data class HandoffPayload(val id: String, val kind: String, val url: String? = null, val title: String? = null, val text: String? = null)
 
 @Serializable data class HandoffAckPayload(val id: String, val status: String)
+
+/** PC → phone: the relay (host, port, key base64url) or enabled = false. */
+@Serializable data class RelayConfigPayload(
+    val enabled: Boolean,
+    val host: String? = null,
+    val port: Int? = null,
+    val key: String? = null,
+)
 
 object HandoffKind { const val URL = "url"; const val TEXT = "text" }
 

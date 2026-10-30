@@ -129,7 +129,32 @@
    go to every connected phone with clipboard sync on; the Settings panel says
    so. Logs record how many phones are connected and hashed ids, never names.
 
+17. **Remote access (relay)** — off by default; the user runs their own
+   relay and turns it on at the PC (docs/remote.md). Sessions through the
+   relay use the same mutual authentication, ECDH handshake and AES-GCM
+   encryption as on the local network, so the relay sees only ciphertext.
+   Who may use the relay is controlled by its own key: clients prove they hold
+   it with an HMAC over a fresh nonce and timestamp (each proof works once,
+   within 2 minutes); the key itself is never sent. The PC stores the relay
+   link encrypted for the Windows user (DPAPI); it reaches the phone only
+   inside the encrypted session (`relay.config`), never in a QR code, and only
+   phones that advertise `remote`. A phone meets its PC in a room derived from
+   both long-term public keys, which only the two of them know; even someone
+   who learned a room and the relay key can't get past the handshake.
+   Pairing through the relay is refused: new devices pair face to face. The
+   relay limits connections overall and per address, drops silent or idle
+   connections, and logs counts and reason codes only; Bridge's own logs
+   record the route (`lan`/`relay`) and relay outcomes, never the relay's
+   address, key or rooms.
+
 ## Known limits (MVP)
+
+- Through a relay, the relay's operator (normally the user) can see which IP
+  addresses connect, when, and how much data flows, plus each pair's room id;
+  not contents, names or keys. The relay key in the phone's app storage lets a
+  device use the relay, not read anything.
+- A phone learns the relay (or that it was turned off) only when it next
+  connects to the PC; until then it keeps using what it knew.
 
 - A phone connected to a fallback PC stays with it until that connection
   ends; it doesn't jump back to the chosen PC the moment that one comes into

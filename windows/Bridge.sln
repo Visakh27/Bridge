@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bridge.Core", "Bridge.Core\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bridge.Windows", "Bridge.Windows\Bridge.Windows.csproj", "{55555555-5555-5555-5555-555555555555}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bridge.Relay", "Bridge.Relay\Bridge.Relay.csproj", "{88888888-8888-8888-8888-888888888888}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bridge.Tests", "Bridge.Tests\Bridge.Tests.csproj", "{77777777-7777-7777-7777-777777777777}"
 EndProject
 Global
@@ -97,6 +99,18 @@ Global
 		{77777777-7777-7777-7777-777777777777}.Release|x86.Build.0 = Release|Any CPU
 		{77777777-7777-7777-7777-777777777777}.Release|ARM64.ActiveCfg = Release|Any CPU
 		{77777777-7777-7777-7777-777777777777}.Release|ARM64.Build.0 = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|x64.Build.0 = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|x86.Build.0 = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|x64.ActiveCfg = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|x64.Build.0 = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|x86.ActiveCfg = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|x86.Build.0 = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{88888888-8888-8888-8888-888888888888}.Release|ARM64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -167,6 +167,17 @@ public sealed record HandoffPayload(string Id, string Kind)
 /// <summary>Outcome of a handoff (see <see cref="HandoffStatus"/>).</summary>
 public sealed record HandoffAckPayload(string Id, string Status);
 
+/// <summary>
+/// PC → phone: where its relay is (Enabled, with Host, Port and the relay Key, base64url), or
+/// Enabled = false to stop using one. Sent only over an authenticated session.
+/// </summary>
+public sealed record RelayConfigPayload(bool Enabled)
+{
+    public string? Host { get; init; }
+    public int? Port { get; init; }
+    public string? Key { get; init; }
+}
+
 public static class HandoffKind
 {
     public const string Url = "url";

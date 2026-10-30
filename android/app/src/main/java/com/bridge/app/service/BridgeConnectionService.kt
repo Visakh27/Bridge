@@ -48,6 +48,8 @@ class BridgeConnectionService : Service() {
         val pcName: String? = null,
         /** The PC connected (or being connected) to. */
         val pcId: String? = null,
+        /** Connected through the PC's relay (away from its network). */
+        val viaRelay: Boolean = false,
         val lastTransfer: String? = null,
         /** Why the last connection attempt failed, in plain words (null after connecting). */
         val lastError: String? = null,
@@ -207,6 +209,9 @@ class BridgeConnectionService : Service() {
             return app.pcChooser.order(SharedPrefsPairedDeviceStore(context).list())
         }
 
+        /** Whether [pcId] has told this phone about a relay (remote access on). */
+        fun hasRelay(context: Context, pcId: String): Boolean = SharedPrefsRelayConfigStore(context).get(pcId) != null
+
         /** The PC the user chose in Settings (null: whichever was connected last). */
         fun pinnedPcId(context: Context): String? = (context.applicationContext as BridgeApplication).pcChooser.pinnedPcId
 
@@ -225,6 +230,7 @@ class BridgeConnectionService : Service() {
             val store = SharedPrefsPairedDeviceStore(context)
             store.revoke(deviceId)
             app.pcChooser.forgotten(deviceId)
+            SharedPrefsRelayConfigStore(context).put(deviceId, null)
             val left = store.list().size
             if (left == 0) {
                 instance?.stopSelf()
@@ -285,37 +291,44 @@ class BridgeConnectionService : Service() {
     private suspend fun connectLoop() {
         val app = application as BridgeApplication
         val identity = app.identity
+        val relayStore = SharedPrefsRelayConfigStore(this)
+        val relayHandler = RelayConfigHandler(relayStore) { _, on -> diagnostics.info("relay.config", LogField.flag("on", on)) }
+        fun newSession(pc: PairedDevice, relay: RelayConfig?) = BridgeClientSession(
+            identity, pc, fileTransfer, clipboardSync, downloadDir(),
+            listener = object : BridgeClientSession.Listener {
+                private var connectedAt = 0L
+                override fun onConnected(peerFeatures: List<String>) {
+                    connectedAt = System.currentTimeMillis()
+                    PhoneDiagnostics.sessionStarted(diagnostics, pc.deviceId, peerFeatures)
+                    diagnostics.info("session.route", LogField.code("route", if (relay != null) "relay" else "lan"))
+                    app.pcChooser.connected(pc.deviceId)
+                    _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName, pcId = pc.deviceId, viaRelay = relay != null, lastError = null, nextRetryAt = null) }
+                    updateNotification(getString(R.string.connected_service_text, pc.deviceName))
+                }
+                override fun onPeerError(error: ErrorPayload) {
+                    diagnostics.warn("peer.error", LogField.code("code", error.code))
+                }
+                override fun onDisconnected() {
+                    PhoneDiagnostics.sessionEnded(diagnostics, pc.deviceId, System.currentTimeMillis() - connectedAt)
+                    _state.update { it.copy(status = Status.CONNECTING, viaRelay = false) }
+                    updateNotification(getString(R.string.connecting_service_text))
+                }
+            },
+            statusProvider = ::currentStatus,
+            // Through the relay: the same handshake and encryption, over a connection the relay pipes to the PC.
+            connect = if (relay == null) TcpTransport::connect
+                else { _, _ -> RelayClient.join(relay, RelayProtocol.room(pc.publicKey(), identity.publicKeyBytes())) },
+            notifications = app.notificationMirror,
+            photos = app.photoService,
+            handoff = app.handoffInbox,
+            relay = relayHandler,
+        ).also { session = it }
         val loop = ReconnectLoop(
             store = store,
             discovery = PcDiscovery(targets = network::broadcastTargets),
             chooser = app.pcChooser,
-            sessionFactory = { pc ->
-                BridgeClientSession(
-                    identity, pc, fileTransfer, clipboardSync, downloadDir(),
-                    listener = object : BridgeClientSession.Listener {
-                        private var connectedAt = 0L
-                        override fun onConnected(peerFeatures: List<String>) {
-                            connectedAt = System.currentTimeMillis()
-                            PhoneDiagnostics.sessionStarted(diagnostics, pc.deviceId, peerFeatures)
-                            app.pcChooser.connected(pc.deviceId)
-                            _state.update { it.copy(status = Status.CONNECTED, pcName = pc.deviceName, pcId = pc.deviceId, lastError = null, nextRetryAt = null) }
-                            updateNotification(getString(R.string.connected_service_text, pc.deviceName))
-                        }
-                        override fun onPeerError(error: ErrorPayload) {
-                            diagnostics.warn("peer.error", LogField.code("code", error.code))
-                        }
-                        override fun onDisconnected() {
-                            PhoneDiagnostics.sessionEnded(diagnostics, pc.deviceId, System.currentTimeMillis() - connectedAt)
-                            _state.update { it.copy(status = Status.CONNECTING) }
-                            updateNotification(getString(R.string.connecting_service_text))
-                        }
-                    },
-                    statusProvider = ::currentStatus,
-                    notifications = app.notificationMirror,
-                    photos = app.photoService,
-                    handoff = app.handoffInbox,
-                ).also { session = it }
-            },
+            sessionFactory = { pc -> newSession(pc, null) },
+            relaySessionFactory = { pc -> relayStore.get(pc.deviceId)?.let { newSession(pc, it) } },
             listener = object : ReconnectLoop.Listener {
                 override fun onConnecting(pc: PairedDevice) {
                     PhoneDiagnostics.connectAttempt(diagnostics, pc.deviceId)
@@ -329,6 +342,10 @@ class BridgeConnectionService : Service() {
                 override fun onAttemptFailed(pc: PairedDevice, error: Exception) {
                     PhoneDiagnostics.connectFailed(diagnostics, error)
                     _state.update { it.copy(lastError = friendlyError(error, pc.deviceName)) }
+                }
+                override fun onTryingRelay(pc: PairedDevice) {
+                    diagnostics.info("relay.trying")
+                    _state.update { it.copy(status = Status.CONNECTING, pcName = pc.deviceName, pcId = pc.deviceId) }
                 }
                 override fun onRetryScheduled(delayMs: Long) {
                     _state.update { it.copy(nextRetryAt = System.currentTimeMillis() + delayMs) }
@@ -344,7 +361,12 @@ class BridgeConnectionService : Service() {
         )
         reconnectLoop = loop
         network.start(
-            onAvailable = { diagnostics.info("network.available"); loop.wake() },
+            onAvailable = {
+                diagnostics.info("network.available")
+                // Back on a network (maybe the PC's): prefer a direct connection over the relay.
+                if (_state.value.viaRelay) loop.dropCurrentSession()
+                loop.wake()
+            },
             onLost = { diagnostics.info("network.lost"); loop.dropCurrentSession() },
         )
         try {
@@ -370,6 +392,12 @@ class BridgeConnectionService : Service() {
 
     private fun friendlyError(e: Exception, pcName: String): String = when (e) {
         is PcFullException -> "$pcName already has the most phones it allows connected. Bridge will try again."
+        is RelayRefusedException -> when (e.code) {
+            "pc_offline" -> "$pcName isn't on your relay right now (is it on, with remote access turned on?)."
+            "unauthorized" -> "Your relay didn't accept this phone. Connect once on the same network as $pcName to update it."
+            "busy" -> "Your relay is busy. Bridge will try again."
+            else -> "Couldn't connect through your relay."
+        }
         is AuthenticationException -> "Another device answered at $pcName's address, so Bridge didn't connect."
         is java.net.SocketTimeoutException -> "$pcName didn't answer. Is Bridge running on it?"
         is java.net.ConnectException -> "Couldn't reach $pcName. Is Bridge running on it, on the same Wi-Fi?"
